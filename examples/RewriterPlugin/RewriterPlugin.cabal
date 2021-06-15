@@ -1,0 +1,72 @@
+cabal-version:  3.0
+name:           RewriterPlugin
+version:        0.1.0.0
+synopsis:       Demonstration of type-family rewriting plugins using ghc-tcplugin-api.
+license:        BSD-3-Clause
+build-type:     Simple
+author:         Sam Derbyshire
+maintainer:     Sam Derbyshire
+copyright:      2021 Sam Derbyshire
+
+common common
+
+  build-depends:
+    base
+      >= 4.15.0 && < 4.18
+
+  default-language:
+    Haskell2010
+
+  ghc-options:
+    -O1
+    -Wall
+    -Wcompat
+    -fwarn-missing-local-signatures
+    -fwarn-incomplete-uni-patterns
+    -fwarn-missing-deriving-strategies
+    -fno-warn-unticked-promoted-constructors
+    -dcore-lint
+
+common ghc-api
+
+  build-depends:
+    ghc
+      >= 9.3 && < 9.5,
+    ghc-tcplugin-api
+
+
+
+library
+
+  import:
+    common, ghc-api
+
+  build-depends:
+    ghc-tcplugin-api
+
+  hs-source-dirs:
+    plugin
+
+  exposed-modules:
+    RewriterPlugin.Definitions,
+    RewriterPlugin
+
+library RewriterPlugin-Examples
+  
+  import:
+    common
+
+  hs-source-dirs:
+    examples
+
+  exposed-modules:
+    RewriterPlugin.Examples.Pass
+    RewriterPlugin.Examples.Fail1
+    RewriterPlugin.Examples.Fail2
+    RewriterPlugin.Examples.Fail3
+    RewriterPlugin.Examples.Fail4
+
+  build-depends:
+    RewriterPlugin
+
+  visibility: public

@@ -1,0 +1,59 @@
+cabal-version:  3.0
+name:           ghc-tcplugin-api
+version:        0.1.0.0
+synopsis:       An API for type-checker plugins.
+license:        BSD-3-Clause
+build-type:     Simple
+author:         Sam Derbyshire
+maintainer:     Sam Derbyshire
+copyright:      2021 Sam Derbyshire
+homepage:       https://github.com/sheaf/ghc-tcplugin-api
+description:
+
+  This library attempts to provide a streamlined monadic interface
+  for writing GHC type-checking plugins.
+
+  Each stage in a type-checking plugin (initialisation, solving, rewriting,
+  shutdown) has a corresponding monad, preventing operations that are only
+  allowed in some stages to be used in the others stages.
+  Operations that work across multiple stages are overloaded across monads
+  using MTL-like typeclasses.
+
+  Some operations, like creating evidence for constraints or creating
+  custom type error messages, are also simplified.
+
+  Call 'mkTcPlugin' to create a bona-fide GHC type-checking plugin using this API.
+
+  Unsafe lifting and unlifting of 'TcM' computations is exposed in the internals
+  of the library, but it is hoped that users will not need such functionality.
+
+
+library
+
+  build-depends:
+    base
+      >= 4.15.0 && < 4.18,
+    ghc
+      >= 9.3    && < 9.5,
+    transformers
+      >= 0.5    && < 0.6,
+
+  default-language:
+    Haskell2010
+
+  ghc-options:
+    -O1
+    -Wall
+    -Wcompat
+    -fwarn-missing-local-signatures
+    -fwarn-incomplete-uni-patterns
+    -fwarn-missing-deriving-strategies
+    -fno-warn-unticked-promoted-constructors
+    -dcore-lint
+
+  hs-source-dirs:
+    src
+
+  exposed-modules:
+    GHC.TcPlugin.API,
+    GHC.TcPlugin.API.Internal
