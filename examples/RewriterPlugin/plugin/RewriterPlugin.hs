@@ -7,10 +7,8 @@
 module RewriterPlugin ( plugin ) where
 
 -- ghc
-import qualified GHC.Plugins  as GHC
+import qualified GHC.Plugins as GHC
   ( Plugin(..), defaultPlugin, purePlugin )
-import qualified GHC.Tc.Types as GHC
-  ( TcPlugin )
 
 -- ghc-tcplugin-api
 import qualified GHC.TcPlugin.API as API
@@ -23,19 +21,18 @@ import GHC.TcPlugin.API
 plugin :: GHC.Plugin
 plugin =
   GHC.defaultPlugin
-    { GHC.tcPlugin        = tcPlugin
+    { GHC.tcPlugin        = \ _args -> Just $ API.mkTcPlugin tcPlugin
     , GHC.pluginRecompile = GHC.purePlugin
     }
 
-tcPlugin :: [ String ] -> Maybe GHC.TcPlugin
-tcPlugin _args =
-  Just . API.mkTcPlugin $
-    API.TcPlugin
-      { API.tcPluginInit    = tcPluginInit
-      , API.tcPluginSolve   = tcPluginSolve
-      , API.tcPluginRewrite = tcPluginRewrite
-      , API.tcPluginStop    = tcPluginStop
-      }
+tcPlugin :: API.TcPlugin
+tcPlugin =
+  API.TcPlugin
+    { API.tcPluginInit    = tcPluginInit
+    , API.tcPluginSolve   = tcPluginSolve
+    , API.tcPluginRewrite = tcPluginRewrite
+    , API.tcPluginStop    = tcPluginStop
+    }
 
 data PluginDefs =
   PluginDefs
