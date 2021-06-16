@@ -22,13 +22,8 @@ description:
   Some operations, like creating evidence for constraints or creating
   custom type error messages, are also simplified.
 
-  Call 'mkTcPlugin' to create a bona-fide GHC type-checking plugin using this API.
-
-  Check the associated <https://github.com/sheaf/ghc-tcplugin-api GitHub repository>
+  Please refer to the <https://github.com/sheaf/ghc-tcplugin-api associated GitHub repository>
   for example usage.
-
-  Unsafe lifting and unlifting of 'TcM' computations is exposed in the internals
-  of the library, but it is hoped that users will not need such functionality.
 
 library
 

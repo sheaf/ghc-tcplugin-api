@@ -14,21 +14,22 @@
 
 {-|
 Module: GHC.TcPlugin.API.Internal
-Description: Internal module: unsafe operations for type-checking plugins.
 
 This module provides operations to directly lift and unlift computations in
-GHC's 'TcM' monad to the various type-checking plugin monads, in the form
+GHC's 'GHC.Tc.TcM' monad to the various type-checking plugin monads, in the form
 of the functions
 
-  > unsafeLiftTcM :: GHC.TcM a -> m a
+  > unsafeLiftTcM :: TcM a -> m a
 
-  > unsafeWithRunInTcM :: ( ( forall a. m a -> GHC.TcM a ) -> GHC.TcM b ) -> m b
+  > unsafeWithRunInTcM :: ( ( forall a. m a -> TcM a ) -> TcM b ) -> m b
+
+Here 'GHC.Tc.TcM' is GHC's internal type-checker monad.
 
 It also exposes extra environment available in the solving/rewriting stages:
 
-  > askEvBinds :: TcPluginM Solve GHC.EvBindsVar
+  > askEvBinds :: TcPluginM Solve EvBindsVar
 
-  > askRewriteEnv :: TcPluginM Rewrite GHC.RewriteEnv
+  > askRewriteEnv :: TcPluginM Rewrite RewriteEnv
 
 It is hoped that none of these internal operations are necessary, and that users
 can fulfill their needs without importing this internal module.
@@ -39,13 +40,16 @@ which requires the import of this module.
 -}
 
 module GHC.TcPlugin.API.Internal
-  ( TcPlugin(..), TcPluginStage(..)
+  ( -- * Internal functions and types
+    MonadTcPlugin(..), MonadTcPluginTypeError
+  , unsafeLiftThroughTcM
+    -- * Re-exported functions and types
+  , TcPlugin(..), TcPluginStage(..)
   , TcPluginSolver, TcPluginRewriter
-  , TcPluginM(..), MonadTcPlugin(..), MonadTcPluginTypeError
+  , TcPluginM(..)
   , TcPluginErrorMessage(..)
   , askEvBinds
   , askRewriteEnv
-  , unsafeLiftThroughTcM
   , mkTcPlugin
   , mkTcPluginErrorTy
   )
@@ -149,15 +153,15 @@ data TcPlugin = forall s. TcPlugin
       -- ^ Solve some constraints.
       --
       -- This function will be invoked at two points in the constraint solving
-      -- process: after simplification of given constraints, and after
-      -- solving of wanted constraints. The two phases can be distinguished
-      -- as follows: the deriveds and wanteds will be empty in the first case.
+      -- process: once to manipulate given constraints, and once to solve
+      -- wanted constraints. In the first case (and only in the first case),
+      -- no wanted constraints will be passed to the plugin.
       --
       -- The plugin can either return a contradiction,
       -- or specify that it has solved some constraints (with evidence),
       -- and possibly emit additional wanted constraints.
       --
-      -- Use @ \ _ _ _ _ -> pure $ TcPluginOK [] [] @ if your plugin
+      -- Use @ \\ _ _ _ _ -> pure $ TcPluginOK [] [] @ if your plugin
       -- does not provide this functionality.
 
   , tcPluginRewrite :: s -> GHC.UniqFM GHC.TyCon TcPluginRewriter
@@ -190,13 +194,19 @@ newtype instance TcPluginM Rewrite a = TcPluginRewriteM { tcPluginRewriteM :: Bu
 newtype instance TcPluginM Stop    a = TcPluginStopM    { tcPluginStopM    :: GHC.TcPluginM a }
   deriving newtype ( Functor, Applicative, Monad )
 
+-- | Ask for the evidence currently gathered by the type-checker.
+--
+-- Only available in the solver part of the type-checking plugin.
 askEvBinds :: TcPluginM Solve GHC.EvBindsVar
 askEvBinds = TcPluginSolveM ( \ _ evBinds -> pure evBinds )
 
+-- | Ask for the current rewriting environment.
+--
+-- Only available in the rewriter part of the type-checking plugin.
 askRewriteEnv :: TcPluginM Rewrite GHC.RewriteEnv
 askRewriteEnv = TcPluginRewriteM ( \ _ rewriteEnv -> pure rewriteEnv )
 
--- | A 'MonadTcPlugin' is essentially a reader monad over GHC's 'TcM' monad.
+-- | A 'MonadTcPlugin' is essentially a reader monad over GHC's 'GHC.Tc.TcM' monad.
 --
 -- This means we have both a @lift@ and an @unlift@ operation,
 -- similar to @MonadUnliftIO@ or @MonadBaseControl@.
@@ -216,11 +226,11 @@ class Monad m => MonadTcPlugin m where
   -- | Lift a computation from GHC's 'GHC.TcPluginM' monad.
   liftTcPluginM :: GHC.TcPluginM a -> m a
 
-  -- | Lift a computation from the 'TcM' monad.
+  -- | Lift a computation from the 'GHC.Tc.TcM' monad.
   unsafeLiftTcM :: GHC.TcM a -> m a
   unsafeLiftTcM = liftTcPluginM . GHC.unsafeTcPluginTcM
 
-  -- | Unlift a computation from the 'TcM' monad.
+  -- | Unlift a computation from the 'GHC.Tc.TcM' monad.
   --
   -- If this type signature seems confusing, I recommend reading Alexis King's
   -- excellent blog post on @MonadBaseControl@:
@@ -247,14 +257,14 @@ instance MonadTcPlugin ( TcPluginM Stop ) where
   liftTcPluginM = TcPluginStopM
   unsafeWithRunInTcM runInTcM = unsafeLiftTcM $ runInTcM ( GHC.runTcPluginM . tcPluginStopM )
 
--- | Take a function whose argument and result types are both within the 'GHC.TcM' monad,
+-- | Take a function whose argument and result types are both within the 'GHC.Tc.TcM' monad,
 -- and return a function that works within a type-checking plugin monad.
 --
 -- Please report a bug if you find yourself needing to use this function.
 unsafeLiftThroughTcM :: MonadTcPlugin m => ( GHC.TcM a -> GHC.TcM b ) -> m a -> m b
 unsafeLiftThroughTcM f ma = unsafeWithRunInTcM \ runInTcM -> f ( runInTcM ma )
 
--- | Create a type-checker plugin for GHC from this API.
+-- | Use this function to create a type-checker plugin to pass to GHC.
 mkTcPlugin :: TcPlugin -> GHC.TcPlugin
 mkTcPlugin ( TcPlugin { tcPluginInit = tcPluginInit :: TcPluginM Init userDefs, tcPluginSolve, tcPluginRewrite, tcPluginStop } ) =
   GHC.TcPlugin
@@ -287,11 +297,15 @@ mkTcPlugin ( TcPlugin { tcPluginInit = tcPluginInit :: TcPluginM Init userDefs, 
 
 -- | Monads for type-checking plugins which are able to throw type errors.
 --
--- These are the monads for to 'tcPluginSolve' and 'tcPluginRewrite';
--- it is not possible to throw type errors in 'tcPluginInit' or 'tcPluginStop'.
+-- These operations are supported by the monads that 'tcPluginSolve'
+-- and 'tcPluginRewrite' use; it is not possible to throw type errors
+-- in 'tcPluginInit' or 'tcPluginStop'.
 --
 -- Note that the method of this typeclass is not exported,
 -- as it is only used internally.
+--
+-- 'mkTcPluginErrorTy' is an example of an exported function that
+-- uses this typeclass.
 type  MonadTcPluginTypeError :: ( Type -> Type ) -> Constraint
 class MonadTcPlugin m => MonadTcPluginTypeError m where
   askBuiltins :: m BuiltinDefs
