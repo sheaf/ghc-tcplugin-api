@@ -4,6 +4,8 @@
 
 This library attempts to provide a convenient interface for authors of GHC type-checking plugins.    
 
+**Note**: this is a work-in-progress, and depends on current improvements within GHC itself.
+
 Different stages of a type-checking plugin (initialisation, solving, rewriting, shutdown) are given
 different monads to operate within. This ensures operations that only make sense in one context
 aren't mistakenly carried out in another.    
@@ -24,3 +26,8 @@ only need to import this library for their type-checking plugin needs, and not t
 This should assist discoverability: instead of having to trawl through the entire GHC codebase,
 new users should be able to determine at a glance what functions might be appropriate for their
 usecase using this library's interface.
+
+## Examples
+
+A simple example plugin which rewrites type family applications, emitting wanted constraints and
+throwing custom type errors as it goes, is provided [here](examples/RewriterPlugin/plugin/RewriterPlugin.hs).
