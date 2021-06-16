@@ -41,7 +41,7 @@ which requires the import of this module.
 module GHC.TcPlugin.API.Internal
   ( TcPlugin(..), TcPluginStage(..)
   , TcPluginSolver, TcPluginRewriter
-  , TcPluginM(..), MonadTcPlugin(..), MonadTcPluginTypeError(..)
+  , TcPluginM(..), MonadTcPlugin(..), MonadTcPluginTypeError
   , TcPluginErrorMessage(..)
   , askEvBinds
   , askRewriteEnv
@@ -203,6 +203,9 @@ askRewriteEnv = TcPluginRewriteM ( \ _ rewriteEnv -> pure rewriteEnv )
 --
 -- See for instance 'unsafeLiftThroughTcM', which is an example of function that
 -- one would not be able to write using only a @lift@ operation.
+-- 
+-- Note that you need to import the internal module to access the methods.
+-- Please report a bug if you find yourself needing this functionality.
 type  MonadTcPlugin :: ( Type -> Type ) -> Constraint
 class Monad m => MonadTcPlugin m where
 
@@ -244,6 +247,10 @@ instance MonadTcPlugin ( TcPluginM Stop ) where
   liftTcPluginM = TcPluginStopM
   unsafeWithRunInTcM runInTcM = unsafeLiftTcM $ runInTcM ( GHC.runTcPluginM . tcPluginStopM )
 
+-- | Take a function whose argument and result types are both within the 'GHC.TcM' monad,
+-- and return a function that works within a type-checking plugin monad.
+--
+-- Please report a bug if you find yourself needing to use this function.
 unsafeLiftThroughTcM :: MonadTcPlugin m => ( GHC.TcM a -> GHC.TcM b ) -> m a -> m b
 unsafeLiftThroughTcM f ma = unsafeWithRunInTcM \ runInTcM -> f ( runInTcM ma )
 
@@ -282,6 +289,9 @@ mkTcPlugin ( TcPlugin { tcPluginInit = tcPluginInit :: TcPluginM Init userDefs, 
 --
 -- These are the monads for to 'tcPluginSolve' and 'tcPluginRewrite';
 -- it is not possible to throw type errors in 'tcPluginInit' or 'tcPluginStop'.
+--
+-- Note that the method of this typeclass is not exported,
+-- as it is only used internally.
 type  MonadTcPluginTypeError :: ( Type -> Type ) -> Constraint
 class MonadTcPlugin m => MonadTcPluginTypeError m where
   askBuiltins :: m BuiltinDefs
@@ -303,7 +313,7 @@ instance TypeError ( 'Text "Cannot throw type errors in 'tcPluginStop'." )
 -- 
 -- A 'CtLoc' will still need to be provided in order to inform GHC of the
 -- origin of the error (e.g.: which part of the source code should be
--- highlighted?). See 'setCtLocM'.
+-- highlighted?). See 'GHC.TcPlugin.API.setCtLocM'.
 data TcPluginErrorMessage
   = Txt !String
   -- ^ Show the text as is.
@@ -318,7 +328,7 @@ infixl 6 :-:
 
 -- | Create an error type with the desired error message.
 --
--- The result can be paired with a 'GHC.CtLoc' in order to throw a type error,
+-- The result can be paired with a 'CtLoc' in order to throw a type error,
 -- for instance by using 'GHC.TcPlugin.API.newWanted'.
 mkTcPluginErrorTy :: MonadTcPluginTypeError m => TcPluginErrorMessage -> m GHC.PredType
 mkTcPluginErrorTy msg = do

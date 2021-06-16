@@ -17,12 +17,13 @@ functions to streamline certain common operations such as creating evidence
 Call 'mkTcPlugin' to create a GHC type-checking plugin from the data of a
 'TcPlugin' as defined by this library.
 
+To get started, check the associated <https://github.com/sheaf/ghc-tcplugin-api GitHub repository>
+for example usage.
+
 The internal module "GHC.TcPlugin.API.Internal" can be used to directly
 lift and unlift computations in GHC's 'TcM' monad, but it is hoped that
 the interface provided in this module is sufficient.
 
-Please file a bug on the bug tracker if you have found yourself needing
-to use the internal module.
 -}
 
 module GHC.TcPlugin.API
@@ -30,7 +31,6 @@ module GHC.TcPlugin.API
     mkTcPlugin, tcPluginIO
   , TcPlugin(..), TcPluginStage(..), TcPluginM
   , MonadTcPlugin, MonadTcPluginTypeError
-  , TcPluginMonadStage, TcPluginTypeErrorStage
   , TcPluginErrorMessage(..)
   , TcPluginSolver, TcPluginSolveResult(..)
   , TcPluginRewriter, TcPluginRewriteResult(..)
@@ -85,10 +85,10 @@ module GHC.TcPlugin.API
     -- * Getting the TcM state
   , HscEnv(..), TcGblEnv(..), TcLclEnv(..)
   , InstEnvs(..), FamInstEnv
-  , getTopEnv
   , getEnvs
   , getInstEnvs
   , getFamInstEnvs
+  , UniqDFM, lookupUDFM, lookupUDFM_Directly, elemUDFM
 
     -- * Type variables
   , newUnique
@@ -114,7 +114,7 @@ module GHC.TcPlugin.API
 
     -- * Manipulating evidence bindings
   , askEvBinds, mkPluginUnivEvTerm
-  , EvBind(..), EvTerm(..), EvVar, CoercionHole(..)
+  , EvBind(..), EvTerm(..), EvVar, EvBindsVar, CoercionHole(..)
   , newEvVar, setEvBind, evCoercion
 
     -- * Displaying messages
@@ -126,10 +126,6 @@ module GHC.TcPlugin.API
   , module GHC.Builtin.Types
   )
   where
-
--- base
-import Data.Kind
-  ( Constraint )
 
 -- ghc
 import GHC.Builtin.Types
@@ -180,7 +176,7 @@ import GHC.Tc.Types.Constraint
   , mkNonCanonical
   )
 import GHC.Tc.Types.Evidence
-  ( EvBind(..), EvTerm(..), EvExpr
+  ( EvBind(..), EvTerm(..), EvExpr, EvBindsVar(..)
   , evCoercion
   )
 import GHC.Tc.Types.Origin
@@ -202,6 +198,8 @@ import GHC.Types.Unique
   ( Unique )
 import GHC.Types.Unique.FM
   ( UniqFM, emptyUFM, listToUFM )
+import GHC.Types.Unique.DFM
+  ( UniqDFM, lookupUDFM, lookupUDFM_Directly, elemUDFM )
 import GHC.Types.Var
   ( Id, TcTyVar, EvVar )
 import GHC.Utils.Outputable
@@ -223,7 +221,7 @@ import Control.Monad.IO.Class
 import GHC.TcPlugin.API.Internal
 
 --------------------------------------------------------------------------------
-
+{-
 -- | A type-checking plugin stage that supports monadic operations.
 -- 
 -- The following formulations can be used interchangeably:
@@ -245,56 +243,84 @@ instance ( MonadTcPlugin ( TcPluginM stage ) ) => TcPluginMonadStage stage
 type     TcPluginTypeErrorStage :: TcPluginStage -> Constraint
 class    ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStage stage
 instance ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStage stage
-
+-}
 --------------------------------------------------------------------------------
 
+-- | Run an 'IO' computation within the plugin.
 tcPluginIO :: MonadTcPlugin m => IO a -> m a
 tcPluginIO = unsafeLiftTcM . liftIO
 
-tcPluginTrace :: MonadTcPlugin m => String -> SDoc -> m ()
+-- | Output some debugging information within the plugin.
+tcPluginTrace :: MonadTcPlugin m
+              => String -- ^ Text at the top of the debug message.
+              -> SDoc   -- ^ Formatted document to print (use the 'ppr' pretty-printing function to obtain an 'SDoc' from any 'Outputable')
+              -> m ()
 tcPluginTrace a b = unsafeLiftTcM $ GHC.traceTc a b
 
 --------------------------------------------------------------------------------
 
+-- | Lookup a Haskell module from the given package, e.g. "Data.List" from "base".
 findImportedModule :: MonadTcPlugin m
                    => ModuleName -> Maybe FastString -> m FindResult
 findImportedModule mod_name mb_pkg = liftTcPluginM $ GHC.findImportedModule mod_name mb_pkg
 
+-- | Obtain the full internal 'Name' (with its unique identifier, etc) from its 'OccName'.
+--
+-- Example usage:
+--
+-- > lookupOrig preludeModule ( mkTcOcc "Bool" )
+--
+-- This will obtain the 'Name' associated with the type 'Bool'.
+--
+-- You can then call 'tcLookupTyCon' to obtain the associated 'TyCon'.
 lookupOrig :: MonadTcPlugin m => Module -> OccName -> m Name
 lookupOrig md = liftTcPluginM . GHC.lookupOrig md
 
+-- | Lookup a global typecheckable-thing from its name.
 tcLookupGlobal :: MonadTcPlugin m => Name -> m TyThing
 tcLookupGlobal = liftTcPluginM . GHC.tcLookupGlobal
 
+-- | Lookup a type constructor from its name (datatype, type synonym or type family).
 tcLookupTyCon :: MonadTcPlugin m => Name -> m TyCon
 tcLookupTyCon = liftTcPluginM . GHC.tcLookupTyCon
 
+-- | Lookup a data constructor (such as 'True', 'Just', ...) from its name.
 tcLookupDataCon :: MonadTcPlugin m => Name -> m DataCon
 tcLookupDataCon = liftTcPluginM . GHC.tcLookupDataCon
 
+-- | Lookup a typeclass from its name.
 tcLookupClass :: MonadTcPlugin m => Name -> m Class
 tcLookupClass = liftTcPluginM . GHC.tcLookupClass
 
+-- | Lookup a typecheckable-thing available in a local context,
+-- such as a local type variable.
 tcLookup :: MonadTcPlugin m => Name -> m TcTyThing
 tcLookup = liftTcPluginM . GHC.tcLookup
 
+-- | Lookup an identifier, such as a type variable.
 tcLookupId :: MonadTcPlugin m => Name -> m Id
 tcLookupId = liftTcPluginM . GHC.tcLookupId
 
 --------------------------------------------------------------------------------
 
-getTopEnv :: MonadTcPlugin m => m HscEnv
-getTopEnv = liftTcPluginM GHC.getTopEnv
-
+-- | Obtain the current global and local type-checking environments.
 getEnvs :: MonadTcPlugin m => m ( TcGblEnv, TcLclEnv )
 getEnvs = liftTcPluginM GHC.getEnvs
 
+-- | Obtain all currently-reachable typeclass instances.
 getInstEnvs :: MonadTcPlugin m => m InstEnvs
 getInstEnvs = liftTcPluginM GHC.getInstEnvs
 
+-- | Obtain all currently-reachable data/type family instances.
+--
+-- First result: external instances.
+-- Second result: instances in the current home package.
 getFamInstEnvs :: MonadTcPlugin m => m ( FamInstEnv, FamInstEnv )
 getFamInstEnvs = liftTcPluginM GHC.getFamInstEnvs
 
+-- | Ask GHC what a type-family application reduces to.
+--
+-- __Warning__: can cause a loop when used within 'tcPluginRewrite'.
 matchFam :: MonadTcPlugin m
          => TyCon -> [ TcType ]
          -> m ( Maybe Reduction )
@@ -302,33 +328,51 @@ matchFam tycon args = liftTcPluginM $ GHC.matchFam tycon args
 
 --------------------------------------------------------------------------------
 
+-- | Create a new unique. Useful for generating new variables in the plugin.
 newUnique :: MonadTcPlugin m => m Unique
 newUnique = liftTcPluginM GHC.newUnique
 
+-- | Create a new meta-variable (unification variable) of the given kind. 
 newFlexiTyVar :: MonadTcPlugin m => Kind -> m TcTyVar
 newFlexiTyVar = liftTcPluginM . GHC.newFlexiTyVar
 
+-- | Query whether a type variable is touchable:
+--   - is it a unification variable (and not a skolem variable)?
+--   - is it actually unifiable given the current 'TcLevel'?
 isTouchableTcPluginM :: MonadTcPlugin m => TcTyVar -> m Bool
 isTouchableTcPluginM = liftTcPluginM . GHC.isTouchableTcPluginM
 
 --------------------------------------------------------------------------------
 
+-- | Zonk the given type, which takes the metavariables in the type and
+-- substitutes their actual value.
+--
+-- See the Note [What is zonking?] in GHC's source code for more information.
 zonkTcType :: MonadTcPlugin m => TcType -> m TcType
 zonkTcType = liftTcPluginM . GHC.zonkTcType
 
+-- | Zonk a given constraint. See 'zonkTcType' for more information,
+-- as well as the Note [zonkCt behaviour] in GHC's source code.
 zonkCt :: MonadTcPlugin m => Ct -> m Ct
 zonkCt = liftTcPluginM . GHC.zonkCt
 
 --------------------------------------------------------------------------------
 
+-- | Create a new derived constraint.
+--
+-- Requires a location (so that error messages can say where the constraint came from)
+-- as well as the actual constraint (encoded as a type).
 newWanted :: MonadTcPlugin m => CtLoc -> PredType -> m CtEvidence
 newWanted loc pty = liftTcPluginM $ GHC.newWanted loc pty
 
--- | Create a new derived constraint.
+-- | Create a new derived constraint. See 'newWanted' for more info.
 newDerived :: MonadTcPlugin m => CtLoc -> PredType -> m CtEvidence
 newDerived loc pty = liftTcPluginM $ GHC.newDerived loc pty
 
--- | Create a new given constraint, with the supplied evidence.
+-- | Create a new given constraint.
+-- 
+-- Unlike 'newWanted' and 'newDerived', we need to supply evidence
+-- for this constraint.
 -- 
 -- Use 'setCtLocM' to pass along the location information,
 -- as only the 'CtOrigin' gets taken into account here.
@@ -337,6 +381,8 @@ newGiven loc pty evtm = do
   tc_evbinds <- askEvBinds
   liftTcPluginM $ GHC.newGiven tc_evbinds loc pty evtm
 
+-- | Set the location information for a computation,
+-- so that the constraint solver reports an error at the given location.
 setCtLocM :: MonadTcPlugin m => CtLoc -> m a -> m a
 setCtLocM loc = unsafeLiftThroughTcM ( GHC.setCtLocM loc )
 
