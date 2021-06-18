@@ -27,6 +27,10 @@ This should assist discoverability: instead of having to trawl through the entir
 new users should be able to determine at a glance what functions might be appropriate for their
 usecase using this library's interface.
 
+## Documentation
+
+The haddocks for this library is available online [here](https://sheaf.github.io/ghc-tcplugin-api/).
+
 ## Examples
 
 A simple example plugin which rewrites type family applications, emitting wanted constraints and
