@@ -120,10 +120,6 @@ module GHC.TcPlugin.API
   , tcLookupId
   , promoteDataCon
 
-    -- | == Relevant types (consider skipping to next section?)
-  , Name, OccName(..), TyThing(..), TcTyThing(..)
-  , Class(..), DataCon, TyCon(..), Id
-
     -- * Constraints
 
     -- | Type-checking plugins will often want to manipulate constraints,
@@ -197,11 +193,6 @@ module GHC.TcPlugin.API
   , classifyPredType, eqType
   , getClassPredTys_maybe
 
-    -- | == Relevant types (consider skipping to next section?)
-  , Pred(..), EqRel(..), FunDep, CtFlavour(..)
-  , Ct(..), CtLoc(..), CtEvidence(..), CtOrigin(..)
-  , PredType, InstEnvs(..)
-
     -- ** Constraint evidence
   
     -- *** Coercions
@@ -212,10 +203,6 @@ module GHC.TcPlugin.API
   , mkPluginUnivCo
   , newCoercionHole
   , mkUnivCo
-
-    -- | == Relevant types (consider skipping to next section?)
-  , Coercion(..), Role(..), UnivCoProvenance(..)
-  , CoercionHole(..)
 
     -- *** Evidence terms
 
@@ -228,11 +215,7 @@ module GHC.TcPlugin.API
   , mkPluginUnivEvTerm
   , newEvVar, setEvBind
   , evCoercion
-
-  --, askEvBinds
-    -- | == Relevant types (consider skipping to next section?)
-  , EvBind(..), EvTerm(..), EvVar, EvExpr, EvBindsVar(..)
-
+--, askEvBinds
 
     -- * Type family applications
 
@@ -307,7 +290,6 @@ module GHC.TcPlugin.API
 
     -- * The type-checking environment
   , getEnvs
-  , TcGblEnv(..), TcLclEnv(..)
 
     -- * Displaying messages
 
@@ -317,15 +299,41 @@ module GHC.TcPlugin.API
     -- If you need more capabilities for constructing pretty-printable documents,
     -- import GHC's "GHC.Utils.Outputable" module.
   , tcPluginTrace
-  , Outputable(..), SDoc
 
     -- * Built-in types
 
-    -- | This module also re-exports the built-in types that GHC already knows about,
-    -- such as the 'TyCon' of 'Bool', the promoted data constructor 'Just', etc.
+    -- | This module also re-exports the built-in types that GHC already knows about.
     --
-    -- See the linked documentation: "GHC.Builtin.Types".
+    -- This allows plugins to directly refer to e.g. the promoted data constructor
+    -- 'True' without having to look up its name.
   , module GHC.Builtin.Types
+
+    -- * GHC types
+
+    -- | These are the types that the plugin will inspect and manipulate.
+
+    -- | = END OF API DOCUMENTATION
+
+    -- | == Names
+  , Name, OccName(..), TyThing(..), TcTyThing(..)
+  , Class(..), DataCon, TyCon(..), Id
+
+    -- | == Constraints
+  , Pred(..), EqRel(..), FunDep, CtFlavour(..)
+  , Ct(..), CtLoc(..), CtEvidence(..), CtOrigin(..)
+  , PredType, InstEnvs(..), TcLevel
+
+    -- | === Coercions and evidence
+  , Coercion(..), Role(..), UnivCoProvenance(..)
+  , CoercionHole(..)
+  , EvBind(..), EvTerm(..), EvVar, EvExpr, EvBindsVar(..)
+
+    -- | == The type-checking environment
+  , TcGblEnv(..), TcLclEnv(..)
+
+    -- | == Pretty-printing
+  , SDoc, Outputable(..)
+
   )
   where
 
@@ -385,7 +393,7 @@ import qualified GHC.Tc.Utils.Monad
   as GHC
     ( traceTc, setCtLocM )
 import GHC.Tc.Utils.TcType
-  ( TcType )
+  ( TcType, TcLevel )
 import GHC.Types.Name
   ( Name )
 import GHC.Types.Name.Occurrence
