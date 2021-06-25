@@ -125,7 +125,7 @@ data TcPluginStage
   | Stop
 
 -- | The @solve@ function of a type-checking plugin takes in Given, Derived
--- and Wanted constraints, and should return a 'TcPluginSolveResult'
+-- and Wanted constraints, and should return a 'GHC.Tc.Types.TcPluginSolveResult'
 -- indicating which Wanted constraints it could solve, or whether any are
 -- insoluble.
 type TcPluginSolver
@@ -135,7 +135,7 @@ type TcPluginSolver
   -> TcPluginM Solve GHC.TcPluginSolveResult
 
 -- | For rewriting type family applications, a type-checking plugin provides
--- a function of this type for each type family 'TyCon'.
+-- a function of this type for each type family 'GHC.Core.TyCon.TyCon'.
 -- 
 -- The function is provided with the current set of Given constraints, together
 -- with the arguments to the type family.
@@ -145,6 +145,25 @@ type TcPluginRewriter
   -> [GHC.Type]   -- ^ Type family arguments (saturated)
   -> TcPluginM Rewrite GHC.TcPluginRewriteResult
 
+-- | A record containing all the stages necessary for the
+-- operation of a type-checking plugin, as defined in this API.
+--
+-- __Note__: this is not the same record as GHC's built-in
+-- 'GHC.Tc.Types.TcPlugin' record.
+-- 
+-- To create a type-checking plugin, use this record type, and then call
+-- 'mkTcPlugin' on the result. This will return something that can be passed
+-- to 'GHC.Plugins.Plugin':
+--
+-- > plugin :: GHC.Plugins.Plugin
+-- > plugin =
+-- >   GHC.Plugins.defaultPlugin
+-- >     { GHC.Plugins.tcPlugin = \ args -> Just $
+-- >        GHC.TcPlugin.API.mkTcPlugin ( myTcPlugin args )
+-- >     }
+-- >
+-- > myTcPlugin :: [String] -> GHC.TcPlugin.API.TcPlugin
+-- > myTcPlugin args = ...
 data TcPlugin = forall s. TcPlugin
   { tcPluginInit    :: TcPluginM Init s
       -- ^ Initialise plugin, when entering type-checker.
@@ -168,9 +187,10 @@ data TcPlugin = forall s. TcPlugin
     -- ^ Rewrite saturated type family applications.
     --
     -- The plugin is expected to supply a mapping from type family names to
-    -- rewriting functions. For each type family 'TyCon', the plugin should
-    -- provide a function which takes in the given constraints and arguments
-    -- of a saturated type family application, and return a possible rewriting.
+    -- rewriting functions. For each type family 'GHC.Core.TyCon.TyCon',
+    -- the plugin should provide a function which takes in the given constraints
+    -- and arguments of a saturated type family application, and return
+    -- a possible rewriting.
     -- See 'TcPluginRewriter' for the expected shape of such a function.
     --
     -- Use @ const emptyUFM @ if your plugin does not provide this functionality.
@@ -325,7 +345,7 @@ instance TypeError ( 'Text "Cannot throw type errors in 'tcPluginStop'." )
 -- This error message can then be thrown at the type-level by the plugin,
 -- by emitting a wanted constraint whose predicate is obtained from 'mkTcPluginErrorTy'.
 -- 
--- A 'CtLoc' will still need to be provided in order to inform GHC of the
+-- A 'GHC.Tc.Types.Constraint.CtLoc' will still need to be provided in order to inform GHC of the
 -- origin of the error (e.g.: which part of the source code should be
 -- highlighted?). See 'GHC.TcPlugin.API.setCtLocM'.
 data TcPluginErrorMessage
@@ -342,7 +362,7 @@ infixl 6 :-:
 
 -- | Create an error type with the desired error message.
 --
--- The result can be paired with a 'CtLoc' in order to throw a type error,
+-- The result can be paired with a 'GHC.Tc.Types.Constraint.CtLoc' in order to throw a type error,
 -- for instance by using 'GHC.TcPlugin.API.newWanted'.
 mkTcPluginErrorTy :: MonadTcPluginTypeError m => TcPluginErrorMessage -> m GHC.PredType
 mkTcPluginErrorTy msg = do

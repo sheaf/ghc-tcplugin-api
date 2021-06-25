@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -dcore-lint #-}
 {-# OPTIONS_GHC -fplugin=RewriterPlugin #-}
 
 {-# LANGUAGE DataKinds     #-}

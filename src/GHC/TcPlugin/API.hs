@@ -29,7 +29,7 @@ module GHC.TcPlugin.API
   ( -- * Basic TcPlugin functionality
 
     -- | Use 'mkTcPlugin' to pass a type-checking plugin to GHC,
-    -- embedded as a field of GHC's 'Plugin' record.
+    -- embedded as a field of GHC's 'GHC.Plugins.Plugin' record.
     -- 
     -- Example for a pure plugin:
     -- 
@@ -175,8 +175,8 @@ module GHC.TcPlugin.API
     -- | A constraint in GHC starts out as "non-canonical", which means that
     -- GHC doesn't know what type of constraint it is.
     -- GHC will inspect the constraint to turn it into a canonical form
-    -- (class constraint, equality constraint, etc.) which satisfies certain invariants
-    -- used during constraint solving.
+    -- (class constraint, equality constraint, etc.) which satisfies certain
+    -- invariants used during constraint solving.
     --
     -- Thus, whenever emitting new constraints, it is usually best to emit a
     -- non-canonical constraint, letting GHC canonicalise it.
@@ -185,13 +185,17 @@ module GHC.TcPlugin.API
     -- ** Analysing types, constraints & predicates
 
     -- | A type-checking plugin might need to inspect constraints itself
-    -- to figure out what it is dealing with. The following functions
-    -- should help for that.
-  , ctPred, ctLoc, ctEvidence
-  , ctFlavour, ctEqRel, ctOrigin
+    -- to figure out what it is dealing with.
+    -- 
+    -- In general, type-checking plugins can encounter all sorts of constraints,
+    -- whether in canonical form or not.
+    -- In order to handle these constraints in a uniform manner, it is usually
+    -- preferable to inspect each constraint's predicate, which can be obtained
+    -- by using `ctPred`'classifyPredType'.
+  , classifyPredType, ctPred
+  , eqType
+  , ctLoc, ctEvidence, ctFlavour, ctEqRel, ctOrigin
   , getInstEnvs
-  , classifyPredType, eqType
-  , getClassPredTys_maybe
 
     -- ** Constraint evidence
   
@@ -212,18 +216,32 @@ module GHC.TcPlugin.API
     -- This means that a plugin that wants to solve a class constraint
     -- will need to provide an evidence term, making use of the evidence
     -- that is already available.
+
   , mkPluginUnivEvTerm
   , newEvVar, setEvBind
   , evCoercion
 --, askEvBinds
 
+    -- *** Class dictionaries
+
+    -- | To create evidence terms for class constraints, type-checking plugins
+    -- need to be able to construct the appropriate dictionaries containing
+    -- the values for the class methods.
+    --
+    -- The class dictionary constructor can be obtained using 'classDataCon'.
+    -- Functions from "GHC.Core.Make", re-exported here, will be useful for
+    -- constructing the necessary terms, e.g. 'mkCoreApp' for an application.
+
+  , classDataCon
+  , module GHC.Core.Make
+
     -- * Type family applications
 
     -- ** Querying for type family reductions
 
-    , matchFam
-    , getFamInstEnvs
-    , FamInstEnv
+  , matchFam
+  , getFamInstEnvs
+  , FamInstEnv
 
     -- ** Specifying type family reductions
 
@@ -321,6 +339,7 @@ module GHC.TcPlugin.API
     -- | == Constraints
   , Pred(..), EqRel(..), FunDep, CtFlavour(..)
   , Ct(..), CtLoc(..), CtEvidence(..), CtOrigin(..)
+  , CanEqLHS(..), QCInst(..)
   , PredType, InstEnvs(..), TcLevel
 
     -- | === Coercions and evidence
@@ -349,16 +368,16 @@ import GHC.Core.Coercion.Axiom
   ( Role(..) )
 import GHC.Core.DataCon
   ( DataCon
-  , promoteDataCon
+  , classDataCon, promoteDataCon
   )
-import GHC.Core.InstEnv
-  ( InstEnvs(..) )
 import GHC.Core.FamInstEnv
   ( FamInstEnv )
+import GHC.Core.InstEnv
+  ( InstEnvs(..) )
+import GHC.Core.Make
 import GHC.Core.Predicate
   ( Pred(..), EqRel(..)
-  , classifyPredType
-  , mkClassPred, getClassPredTys_maybe
+  , classifyPredType, mkClassPred
   )
 import GHC.Core.TyCon
   ( TyCon(..) )
@@ -378,6 +397,7 @@ import GHC.Tc.Types
   )
 import GHC.Tc.Types.Constraint
   ( Ct(..), CtLoc(..), CtEvidence(..), CtFlavour(..)
+  , CanEqLHS(..), QCInst(..)
   , ctPred, ctLoc, ctEvidence
   , ctFlavour, ctEqRel, ctOrigin
   , bumpCtLocDepth
@@ -658,4 +678,4 @@ mkTyFamAppReduction
   -> TcType   -- ^ The type that the type family application reduces to
   -> Reduction
 mkTyFamAppReduction str role tc args ty =
-  Reduction ty ( mkPluginUnivCo str role ( mkTyConApp tc args ) ty )
+  Reduction ty ( mkPluginUnivCo str role ty ( mkTyConApp tc args ) )
