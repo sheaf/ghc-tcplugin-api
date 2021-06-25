@@ -1,3 +1,4 @@
+{-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
@@ -64,8 +65,13 @@ module GHC.TcPlugin.API
 
     -- ** The 'TcPlugin' type
   , TcPlugin(..), TcPluginStage(..)
-  , TcPluginSolver, TcPluginSolveResult(..)
+  , TcPluginSolver
+#if MIN_VERSION_ghc(9,3,0)
+  , TcPluginSolveResult(..)
   , TcPluginRewriter, TcPluginRewriteResult(..)
+#else
+  , TcPluginSolveResult, TcPluginResult(..)
+#endif
 
     -- ** The type-checking plugin monads
 
@@ -164,7 +170,10 @@ module GHC.TcPlugin.API
     -- (e.g. available instances, given constraints, etc).
     --
     -- This is the purpose of 'CtLoc'.
-  , setCtLocM, setCtLocRewriteM
+  , setCtLocM
+#if MIN_VERSION_ghc(9,3,0)
+  , setCtLocRewriteM
+#endif
 
     -- | 'bumpCtLocDepth' adds one to the "depth" of the constraint.
     -- Can help avoid loops, by triggering a "maximum depth exceeded" error.
@@ -243,6 +252,7 @@ module GHC.TcPlugin.API
   , getFamInstEnvs
   , FamInstEnv
 
+#if MIN_VERSION_ghc(9,3,0)
     -- ** Specifying type family reductions
 
     -- | A plugin that wants to rewrite a type family application must provide two
@@ -261,6 +271,7 @@ module GHC.TcPlugin.API
     -- or import the GHC module "GHC.Types.Unique.FM" for a more complete API.
   , mkTyFamAppReduction, askRewriteEnv
   , Reduction(..), RewriteEnv(..)
+#endif
 
     -- * Handling Haskell types
 
@@ -339,8 +350,12 @@ module GHC.TcPlugin.API
     -- | == Constraints
   , Pred(..), EqRel(..), FunDep, CtFlavour(..)
   , Ct(..), CtLoc(..), CtEvidence(..), CtOrigin(..)
-  , CanEqLHS(..), QCInst(..)
-  , PredType, InstEnvs(..), TcLevel
+  , QCInst(..)
+#if MIN_VERSION_ghc(9,2,0)
+  , CanEqLHS(..)
+#endif
+  , Type, PredType
+  , InstEnvs(..), TcLevel
 
     -- | === Coercions and evidence
   , Coercion(..), Role(..), UnivCoProvenance(..)
@@ -357,12 +372,16 @@ module GHC.TcPlugin.API
   where
 
 -- ghc
+import GHC
+  ( TyThing(..) )
 import GHC.Builtin.Types
 import GHC.Core.Class
   ( Class(..), FunDep )
 import GHC.Core.Coercion
-  ( Reduction(..)
-  , mkUnivCo, mkPrimEqPredRole
+  ( mkUnivCo, mkPrimEqPredRole
+#if MIN_VERSION_ghc(9,3,0)
+  , Reduction(..)
+#endif
   )
 import GHC.Core.Coercion.Axiom
   ( Role(..) )
@@ -382,6 +401,19 @@ import GHC.Core.Predicate
 import GHC.Core.TyCon
   ( TyCon(..) )
 import GHC.Core.TyCo.Rep
+  ( Type, PredType, Kind
+  , Coercion(..), CoercionHole(..)
+  , UnivCoProvenance(..)
+  , AnonArgFlag(..), Mult
+  , mkTyVarTy, mkTyVarTys
+  , mkFunTy, mkVisFunTy, mkInvisFunTy, mkVisFunTys
+  , mkForAllTy, mkForAllTys, mkInvisForAllTys
+  , mkPiTy, mkPiTys
+  , mkFunTyMany
+  , mkScaledFunTy
+  , mkVisFunTyMany, mkVisFunTysMany
+  , mkInvisFunTyMany, mkInvisFunTysMany
+  )
 import GHC.Core.Type
   ( eqType, mkTyConTy, mkTyConApp, splitTyConApp_maybe
   , mkAppTy, mkAppTys, getTyVar_maybe
@@ -391,13 +423,20 @@ import GHC.Data.FastString
 import qualified GHC.Tc.Plugin
   as GHC
 import GHC.Tc.Types
-  ( TcPluginSolveResult(..), TcPluginRewriteResult(..)
-  , TcTyThing(..), TcGblEnv(..), TcLclEnv(..)
+  ( TcTyThing(..), TcGblEnv(..), TcLclEnv(..)
+#if MIN_VERSION_ghc(9,3,0)
+  , TcPluginSolveResult(..), TcPluginRewriteResult(..)
   , RewriteEnv(..)
+#else
+  , TcPluginResult(..)
+#endif
   )
 import GHC.Tc.Types.Constraint
   ( Ct(..), CtLoc(..), CtEvidence(..), CtFlavour(..)
-  , CanEqLHS(..), QCInst(..)
+  , QCInst(..)
+#if MIN_VERSION_ghc(9,2,0)
+  , CanEqLHS(..)
+#endif
   , ctPred, ctLoc, ctEvidence
   , ctFlavour, ctEqRel, ctOrigin
   , bumpCtLocDepth
@@ -420,8 +459,6 @@ import GHC.Types.Name.Occurrence
   ( OccName(..)
   , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
   )
-import GHC.Types.TyThing
-  ( TyThing(..) )
 import GHC.Types.Unique
   ( Unique )
 import GHC.Types.Unique.FM
@@ -432,8 +469,13 @@ import GHC.Types.Var
   ( Id, TcTyVar, EvVar )
 import GHC.Utils.Outputable
   ( Outputable(..), SDoc )
-import GHC.Unit.Finder 
+#if MIN_VERSION_ghc(9,2,0)
+import GHC.Unit.Finder
   ( FindResult(..) )
+#else
+import GHC.Driver.Finder
+  ( FindResult(..) )
+#endif
 import GHC.Unit.Module
   ( mkModuleName )
 import GHC.Unit.Module.Name
@@ -473,6 +515,10 @@ class    ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStag
 instance ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStage stage
 -}
 --------------------------------------------------------------------------------
+
+#if !MIN_VERSION_ghc(9,3,0)
+type TcPluginSolveResult = TcPluginResult
+#endif
 
 -- | Run an 'IO' computation within the plugin.
 tcPluginIO :: MonadTcPlugin m => IO a -> m a
@@ -559,7 +605,11 @@ getFamInstEnvs = liftTcPluginM GHC.getFamInstEnvs
 -- __Warning__: can cause a loop when used within 'tcPluginRewrite'.
 matchFam :: MonadTcPlugin m
          => TyCon -> [ TcType ]
+#if MIN_VERSION_ghc(9,3,0)
          -> m ( Maybe Reduction )
+#else
+         -> m ( Maybe ( Coercion, Type ) )
+#endif
 matchFam tycon args = liftTcPluginM $ GHC.matchFam tycon args
 
 --------------------------------------------------------------------------------
@@ -611,19 +661,25 @@ newDerived loc pty = liftTcPluginM $ GHC.newDerived loc pty
 -- as only the 'CtOrigin' gets taken into account here.
 newGiven :: CtLoc -> PredType -> EvExpr -> TcPluginM Solve CtEvidence
 newGiven loc pty evtm = do
+#if MIN_VERSION_ghc(9,3,0)
   tc_evbinds <- askEvBinds
   liftTcPluginM $ GHC.newGiven tc_evbinds loc pty evtm
+#else
+  liftTcPluginM $ GHC.newGiven loc pty evtm
+#endif
 
 -- | Set the location information for a computation,
 -- so that the constraint solver reports an error at the given location.
 setCtLocM :: MonadTcPlugin m => CtLoc -> m a -> m a
 setCtLocM loc = unsafeLiftThroughTcM ( GHC.setCtLocM loc )
 
+#if MIN_VERSION_ghc(9,3,0)
 -- | Use the 'RewriteEnv' to set the 'CtLoc' for a computation.
 setCtLocRewriteM :: TcPluginM Rewrite a -> TcPluginM Rewrite a
 setCtLocRewriteM ma = do
   rewriteCtLoc <- fe_loc <$> askRewriteEnv
   setCtLocM rewriteCtLoc ma
+#endif
 
 --------------------------------------------------------------------------------
 
@@ -638,8 +694,12 @@ newCoercionHole = liftTcPluginM . GHC.newCoercionHole
 -- | Bind an evidence variable.
 setEvBind :: EvBind -> TcPluginM Solve ()
 setEvBind ev_bind = do
+#if MIN_VERSION_ghc(9,3,0)
   tc_evbinds <- askEvBinds
   liftTcPluginM $ GHC.setEvBind tc_evbinds ev_bind
+#else
+  liftTcPluginM $ GHC.setEvBind ev_bind
+#endif
 
 --------------------------------------------------------------------------------
 
@@ -665,6 +725,7 @@ mkPluginUnivEvTerm
   -> EvTerm
 mkPluginUnivEvTerm str role lhs rhs = evCoercion $ mkPluginUnivCo str role lhs rhs
 
+#if MIN_VERSION_ghc(9,3,0)
 -- | Provide a rewriting of a saturated type family application
 -- at the given 'Role' ('Nominal' or 'Representational').
 --
@@ -679,3 +740,4 @@ mkTyFamAppReduction
   -> Reduction
 mkTyFamAppReduction str role tc args ty =
   Reduction ty ( mkPluginUnivCo str role ty ( mkTyConApp tc args ) )
+#endif
