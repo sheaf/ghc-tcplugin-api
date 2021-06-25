@@ -2,6 +2,7 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -70,7 +71,8 @@ module GHC.TcPlugin.API
   , TcPluginSolveResult(..)
   , TcPluginRewriter, TcPluginRewriteResult(..)
 #else
-  , TcPluginSolveResult, TcPluginResult(..)
+  , TcPluginSolveResult
+  , pattern TcPluginContradiction, pattern TcPluginOk
 #endif
 
     -- ** The type-checking plugin monads
@@ -515,10 +517,13 @@ class    ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStag
 instance ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStage stage
 -}
 --------------------------------------------------------------------------------
+-- Backwards compatibility definitions.
 
 #if !MIN_VERSION_ghc(9,3,0)
 type TcPluginSolveResult = TcPluginResult
 #endif
+
+--------------------------------------------------------------------------------
 
 -- | Run an 'IO' computation within the plugin.
 tcPluginIO :: MonadTcPlugin m => IO a -> m a
