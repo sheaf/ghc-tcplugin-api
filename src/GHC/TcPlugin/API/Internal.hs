@@ -42,7 +42,7 @@ which requires the import of this module.
 
 module GHC.TcPlugin.API.Internal
   ( -- * Internal functions and types
-    MonadTcPlugin(..), MonadTcPluginTypeError
+    MonadTcPlugin(..), MonadTcPluginWork
   , unsafeLiftThroughTcM
     -- * Re-exported functions and types
   , TcPlugin(..), TcPluginStage(..)
@@ -101,16 +101,19 @@ import qualified GHC.Tc.Plugin
 import qualified GHC.Tc.Types
   as GHC
     ( TcM, TcPlugin(..), TcPluginM
-    , TcPluginSolver
-#ifdef HAS_REWRITING
-    , TcPluginSolveResult
-    , TcPluginRewriter, TcPluginRewriteResult
-    , RewriteEnv
-#else
+    , TcPluginSolver, TcPluginRewriter
+#ifndef HAS_REWRITING
     , getEvBindsTcPluginM
 #endif
     , runTcPluginM, unsafeTcPluginTcM
     )
+#ifdef HAS_REWRITING
+import GHC.Tc.Types
+    ( TcPluginSolveResult
+    , TcPluginRewriteResult
+    , RewriteEnv
+    )
+#endif
 import qualified GHC.Tc.Types.Constraint
   as GHC
     ( Ct )
@@ -276,8 +279,8 @@ askRewriteEnv = TcPluginRewriteM ( \ _ rewriteEnv -> pure rewriteEnv )
 --
 -- See for instance 'unsafeLiftThroughTcM', which is an example of function that
 -- one would not be able to write using only a @lift@ operation.
--- 
--- Note that you need to import the internal module to access the methods.
+--
+-- Note that you must import the internal module in order to access the methods.
 -- Please report a bug if you find yourself needing this functionality.
 type  MonadTcPlugin :: ( Type -> Type ) -> Constraint
 class Monad m => MonadTcPlugin m where
@@ -399,8 +402,10 @@ mkTcPlugin ( TcPlugin
 #ifdef HAS_REWRITING
     adaptUserSolve :: ( userDefs -> TcPluginSolver )
                    -> TcPluginDefs userDefs
+                   -> GHC.EvBindsVar
                    -> GHC.TcPluginSolver
-    adaptUserSolve userSolve ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs } ) evBindsVar
+    adaptUserSolve userSolve ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs } )
+     evBindsVar
 #ifdef HAS_DERIVEDS
       = \ givens deriveds wanteds -> do
         tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds )
@@ -447,18 +452,19 @@ mkTcPlugin ( TcPlugin
     adaptUserStop userStop ( TcPluginDefs { tcPluginUserDefs } ) =
       tcPluginStopM $ userStop tcPluginUserDefs
 
--- | Monads for type-checking plugins which are able to throw type errors.
+-- | Monads for type-checking plugins which are able to emit new constraints
+-- and throw errors.
 --
 -- These operations are supported by the monads that 'tcPluginSolve'
--- and 'tcPluginRewrite' use; it is not possible to throw type errors
--- in 'tcPluginInit' or 'tcPluginStop'.
+-- and 'tcPluginRewrite' use; it is not possible to emit work or
+-- throw type errors in 'tcPluginInit' or 'tcPluginStop'.
 --
--- 'mkTcPluginErrorTy' is an example of a function that
--- uses this typeclass.
-type  MonadTcPluginTypeError :: ( Type -> Type ) -> Constraint
-class MonadTcPlugin m => MonadTcPluginTypeError m where
+-- See 'mkTcPluginErrorTy' and 'GHC.TcPlugin.API.emitWork' for examples
+-- which require this typeclass.
+type  MonadTcPluginWork :: ( Type -> Type ) -> Constraint
+class MonadTcPlugin m => MonadTcPluginWork m where
   askBuiltins :: m BuiltinDefs
-instance MonadTcPluginTypeError ( TcPluginM Solve ) where
+instance MonadTcPluginWork ( TcPluginM Solve ) where
   askBuiltins = TcPluginSolveM
     \ builtinDefs
       _evBinds
@@ -466,14 +472,14 @@ instance MonadTcPluginTypeError ( TcPluginM Solve ) where
       _deriveds
 #endif
     -> pure builtinDefs
-instance MonadTcPluginTypeError ( TcPluginM Rewrite ) where
+instance MonadTcPluginWork ( TcPluginM Rewrite ) where
   askBuiltins = TcPluginRewriteM \ builtinDefs _evBinds -> pure builtinDefs
 
 instance TypeError ( 'Text "Cannot throw type errors in 'tcPluginInit'." )
-      => MonadTcPluginTypeError ( TcPluginM Init ) where
+      => MonadTcPluginWork ( TcPluginM Init ) where
   askBuiltins = error "Cannot throw type errors in 'tcPluginInit'."
 instance TypeError ( 'Text "Cannot throw type errors in 'tcPluginStop'." )
-      => MonadTcPluginTypeError ( TcPluginM Stop ) where
+      => MonadTcPluginWork ( TcPluginM Stop ) where
   askBuiltins = error "Cannot throw type errors in 'tcPluginStop'."
 
 -- | Use this type like 'GHC.TypeLits.ErrorMessage' to write an error message.
@@ -499,7 +505,7 @@ infixl 6 :-:
 --
 -- The result can be paired with a 'GHC.Tc.Types.Constraint.CtLoc' in order to throw a type error,
 -- for instance by using 'GHC.TcPlugin.API.newWanted'.
-mkTcPluginErrorTy :: MonadTcPluginTypeError m => TcPluginErrorMessage -> m GHC.PredType
+mkTcPluginErrorTy :: MonadTcPluginWork m => TcPluginErrorMessage -> m GHC.PredType
 mkTcPluginErrorTy msg = do
   builtinDefs@( BuiltinDefs { typeErrorTyCon } ) <- askBuiltins
   let

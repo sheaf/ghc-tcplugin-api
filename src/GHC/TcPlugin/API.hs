@@ -83,11 +83,10 @@ module GHC.TcPlugin.API
   , TcPluginM
   , MonadTcPlugin
   
-    -- *** Throwing type errors
-  , MonadTcPluginTypeError
+    -- *** Emitting new work, and throwing type-errors
+  , MonadTcPluginWork
   , TcPluginErrorMessage(..)
   , mkTcPluginErrorTy
-
 
     -- * Name resolution
     
@@ -198,9 +197,7 @@ module GHC.TcPlugin.API
     --
     -- This is the purpose of 'CtLoc'.
   , setCtLocM
-#if HAS_REWRITING
   , setCtLocRewriteM
-#endif
 
     -- | 'bumpCtLocDepth' adds one to the "depth" of the constraint.
     -- Can help avoid loops, by triggering a "maximum depth exceeded" error.
@@ -510,31 +507,6 @@ import GHC.TcPlugin.API.Internal.Shim
 #endif
 
 --------------------------------------------------------------------------------
-{-
--- | A type-checking plugin stage that supports monadic operations.
--- 
--- The following formulations can be used interchangeably:
--- 
--- > MonadTcPlugin m => m a
--- 
--- > TcPluginMonadStage s => TcPluginM s a
-type     TcPluginMonadStage :: TcPluginStage -> Constraint
-class    ( MonadTcPlugin ( TcPluginM stage ) ) => TcPluginMonadStage stage
-instance ( MonadTcPlugin ( TcPluginM stage ) ) => TcPluginMonadStage stage
-
--- | A type-checking plugin stage that supports throwing type errors.
--- 
--- The following formulations can be used interchangeably:
--- 
--- > MonadTcPluginTypeError m => m a
--- 
--- > TcPluginMonadTypeErrorStage s => TcPluginM s a
-type     TcPluginTypeErrorStage :: TcPluginStage -> Constraint
-class    ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStage stage
-instance ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStage stage
--}
-
---------------------------------------------------------------------------------
 
 -- | Run an 'IO' computation within the plugin.
 tcPluginIO :: MonadTcPlugin m => IO a -> m a
@@ -661,11 +633,11 @@ zonkCt = liftTcPluginM . GHC.zonkCt
 --
 -- Requires a location (so that error messages can say where the constraint came from,
 -- what things were in scope at that point, etc), as well as the actual constraint (encoded as a type).
-newWanted :: MonadTcPlugin m => CtLoc -> PredType -> m CtEvidence
+newWanted :: MonadTcPluginWork m => CtLoc -> PredType -> m CtEvidence
 newWanted loc pty = liftTcPluginM $ GHC.newWanted loc pty
 
 -- | Create a new derived constraint. See also 'newWanted'.
-newDerived :: MonadTcPlugin m => CtLoc -> PredType -> m CtEvidence
+newDerived :: MonadTcPluginWork m => CtLoc -> PredType -> m CtEvidence
 newDerived loc pty = liftTcPluginM $ GHC.newDerived loc pty
 
 -- | Create a new given constraint.
@@ -686,16 +658,14 @@ newGiven loc pty evtm = do
 
 -- | Set the location information for a computation,
 -- so that the constraint solver reports an error at the given location.
-setCtLocM :: MonadTcPlugin m => CtLoc -> m a -> m a
+setCtLocM :: MonadTcPluginWork m => CtLoc -> m a -> m a
 setCtLocM loc = unsafeLiftThroughTcM ( GHC.setCtLocM loc )
 
-#if HAS_REWRITING
 -- | Use the 'RewriteEnv' to set the 'CtLoc' for a computation.
 setCtLocRewriteM :: TcPluginM Rewrite a -> TcPluginM Rewrite a
 setCtLocRewriteM ma = do
   rewriteCtLoc <- fe_loc <$> askRewriteEnv
   setCtLocM rewriteCtLoc ma
-#endif
 
 --------------------------------------------------------------------------------
 
