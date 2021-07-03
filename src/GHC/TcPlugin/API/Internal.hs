@@ -49,9 +49,10 @@ module GHC.TcPlugin.API.Internal
   , TcPluginSolver
   , TcPluginM(..)
   , TcPluginErrorMessage(..)
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
   , TcPluginRewriter, askRewriteEnv
 #endif
+  , askDeriveds
   , askEvBinds
   , mkTcPlugin
   , mkTcPluginErrorTy
@@ -98,7 +99,7 @@ import qualified GHC.Tc.Types
   as GHC
     ( TcM, TcPlugin(..), TcPluginM
     , TcPluginSolver
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
     , TcPluginSolveResult
     , TcPluginRewriter, TcPluginRewriteResult
     , RewriteEnv
@@ -117,7 +118,7 @@ import qualified GHC.Tc.Types.Evidence
 import qualified GHC.Types.Name.Occurrence
   as GHC
     ( mkDataOcc, mkTcOcc )
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
 import qualified GHC.Types.Unique.FM
   as GHC
     ( UniqFM )
@@ -142,21 +143,20 @@ data TcPluginStage
   | Rewrite
   | Stop
 
--- | The @solve@ function of a type-checking plugin takes in Given, Derived
--- and Wanted constraints, and should return a 'GHC.Tc.Types.TcPluginSolveResult'
+-- | The @solve@ function of a type-checking plugin takes in Given and Wanted
+-- constraints, and should return a 'GHC.Tc.Types.TcPluginSolveResult'
 -- indicating which Wanted constraints it could solve, or whether any are
 -- insoluble.
 type TcPluginSolver
   =  [GHC.Ct] -- ^ Givens
-  -> [GHC.Ct] -- ^ Deriveds
   -> [GHC.Ct] -- ^ Wanteds
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
   -> TcPluginM Solve GHC.TcPluginSolveResult
 #else
   -> TcPluginM Solve GHC.TcPluginResult
 #endif
 
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
 -- | For rewriting type family applications, a type-checking plugin provides
 -- a function of this type for each type family 'GHC.Core.TyCon.TyCon'.
 -- 
@@ -207,7 +207,7 @@ data TcPlugin = forall s. TcPlugin
       -- Use @ \\ _ _ _ _ -> pure $ TcPluginOK [] [] @ if your plugin
       -- does not provide this functionality.
 
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
   , tcPluginRewrite :: s -> GHC.UniqFM GHC.TyCon TcPluginRewriter
     -- ^ Rewrite saturated type family applications.
     --
@@ -229,26 +229,54 @@ data TcPlugin = forall s. TcPlugin
 -- the 'TcPluginStage' of the plugin.
 type TcPluginM :: TcPluginStage -> ( Type -> Type )
 data family TcPluginM s
-newtype instance TcPluginM Init    a = TcPluginInitM    { tcPluginInitM    :: GHC.TcPluginM a }
+newtype instance TcPluginM Init a =
+  TcPluginInitM { tcPluginInitM :: GHC.TcPluginM a }
   deriving newtype ( Functor, Applicative, Monad )
-newtype instance TcPluginM Solve   a = TcPluginSolveM   { tcPluginSolveM   :: BuiltinDefs -> GHC.EvBindsVar -> GHC.TcPluginM a }
+#ifdef HAS_DERIVEDS
+newtype instance TcPluginM Solve a =
+  TcPluginSolveM { tcPluginSolveM :: BuiltinDefs -> GHC.EvBindsVar -> [GHC.Ct] -> GHC.TcPluginM a }
+  deriving ( Functor, Applicative, Monad )
+    via ( ReaderT BuiltinDefs ( ReaderT GHC.EvBindsVar ( ReaderT [GHC.Ct] GHC.TcPluginM ) ) )
+#else
+newtype instance TcPluginM Solve a =
+  TcPluginSolveM { tcPluginSolveM :: BuiltinDefs -> GHC.EvBindsVar -> GHC.TcPluginM a }
   deriving ( Functor, Applicative, Monad )
     via ( ReaderT BuiltinDefs ( ReaderT GHC.EvBindsVar GHC.TcPluginM ) )
-#if MIN_VERSION_ghc(9,3,0)
-newtype instance TcPluginM Rewrite a = TcPluginRewriteM { tcPluginRewriteM :: BuiltinDefs -> GHC.RewriteEnv -> GHC.TcPluginM a }
+#endif
+#ifdef HAS_REWRITING
+newtype instance TcPluginM Rewrite a =
+  TcPluginRewriteM { tcPluginRewriteM :: BuiltinDefs -> GHC.RewriteEnv -> GHC.TcPluginM a }
   deriving ( Functor, Applicative, Monad )
     via ( ReaderT BuiltinDefs ( ReaderT GHC.RewriteEnv GHC.TcPluginM ) )
 #endif
-newtype instance TcPluginM Stop    a = TcPluginStopM    { tcPluginStopM    :: GHC.TcPluginM a }
+newtype instance TcPluginM Stop a =
+  TcPluginStopM { tcPluginStopM :: GHC.TcPluginM a }
   deriving newtype ( Functor, Applicative, Monad )
 
 -- | Ask for the evidence currently gathered by the type-checker.
 --
 -- Only available in the solver part of the type-checking plugin.
 askEvBinds :: TcPluginM Solve GHC.EvBindsVar
-askEvBinds = TcPluginSolveM ( \ _ evBinds -> pure evBinds )
+askEvBinds = TcPluginSolveM
+  \ _defs
+    evBinds
+#ifdef HAS_DERIVEDS
+    _deriveds
+#endif
+  -> pure evBinds
 
-#if MIN_VERSION_ghc(9,3,0)
+-- | Ask for the Derived constraints that the solver was provided with.
+--
+-- Always returns the empty list on GHC 9.4 or above.
+askDeriveds :: TcPluginM Solve [GHC.Ct]
+askDeriveds =
+#ifdef HAS_DERIVEDS
+  TcPluginSolveM \ _defs _evBinds deriveds -> pure deriveds
+#else
+  pure []
+#endif
+
+#ifdef HAS_REWRITING
 -- | Ask for the current rewriting environment.
 --
 -- Only available in the rewriter part of the type-checking plugin.
@@ -292,22 +320,39 @@ instance MonadTcPlugin ( TcPluginM Init ) where
   liftTcPluginM = TcPluginInitM
   unsafeWithRunInTcM runInTcM
     = unsafeLiftTcM $ runInTcM
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_NEW_API
       ( GHC.runTcPluginM . tcPluginInitM )
 #else
       ( ( `GHC.runTcPluginM` ( error "tcPluginInit: cannot access EvBindsVar" ) ) . tcPluginInitM ) 
 #endif
 instance MonadTcPlugin ( TcPluginM Solve ) where
-  liftTcPluginM  = TcPluginSolveM . ( \ ma _ _ -> ma )
-  unsafeWithRunInTcM runInTcM
-    = TcPluginSolveM \ builtinDefs evBindsVar ->
-      GHC.unsafeTcPluginTcM $ runInTcM
-#if MIN_VERSION_ghc(9,3,0)
-        ( GHC.runTcPluginM . ( \ f -> f builtinDefs evBindsVar ) . tcPluginSolveM )
+  liftTcPluginM  = TcPluginSolveM
+#ifdef HAS_DERIVEDS
+                 . ( \ ma _defs _evBinds _deriveds -> ma )
 #else
-        ( ( `GHC.runTcPluginM` evBindsVar ) . ( \ f -> f builtinDefs evBindsVar ) . tcPluginSolveM )
+                 . ( \ ma _defs _evBinds -> ma )
 #endif
-#if MIN_VERSION_ghc(9,3,0)
+  unsafeWithRunInTcM runInTcM
+    = TcPluginSolveM
+      \ builtinDefs
+        evBinds
+#ifdef HAS_DERIVEDS
+        deriveds
+#endif
+      ->
+        GHC.unsafeTcPluginTcM $ runInTcM
+#ifdef HAS_NEW_API
+          ( GHC.runTcPluginM
+#ifdef HAS_DERIVEDS
+          . ( \ f -> f builtinDefs evBinds deriveds )
+#else
+          . ( \ f -> f builtinDefs evBinds )
+#endif
+          . tcPluginSolveM )
+#else
+          ( ( `GHC.runTcPluginM` evBinds ) . ( \ f -> f builtinDefs evBinds deriveds ) . tcPluginSolveM )
+#endif
+#ifdef HAS_REWRITING
 instance MonadTcPlugin ( TcPluginM Rewrite ) where
   liftTcPluginM = TcPluginRewriteM . ( \ ma _ _ -> ma )
   unsafeWithRunInTcM runInTcM
@@ -319,7 +364,7 @@ instance MonadTcPlugin ( TcPluginM Stop ) where
   liftTcPluginM = TcPluginStopM
   unsafeWithRunInTcM runInTcM
     = unsafeLiftTcM $ runInTcM 
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_NEW_API
       ( GHC.runTcPluginM . tcPluginStopM )
 #else
       ( ( `GHC.runTcPluginM` ( error "tcPluginStop: cannot access EvBindsVar" ) ) . tcPluginStopM )
@@ -337,16 +382,16 @@ mkTcPlugin :: TcPlugin -> GHC.TcPlugin
 mkTcPlugin ( TcPlugin
               { tcPluginInit = tcPluginInit :: TcPluginM Init userDefs
               , tcPluginSolve
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
               , tcPluginRewrite
 #endif
               , tcPluginStop
               }
-            ) =
+           ) =
   GHC.TcPlugin
     { GHC.tcPluginInit    = adaptUserInit    tcPluginInit
     , GHC.tcPluginSolve   = adaptUserSolve   tcPluginSolve
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
     , GHC.tcPluginRewrite = adaptUserRewrite tcPluginRewrite
 #endif
     , GHC.tcPluginStop    = adaptUserStop    tcPluginStop
@@ -357,24 +402,28 @@ mkTcPlugin ( TcPlugin
       tcPluginBuiltinDefs <- initBuiltinDefs
       tcPluginUserDefs    <- tcPluginInitM userInit
       pure ( TcPluginDefs { tcPluginBuiltinDefs, tcPluginUserDefs })
-    
-#if MIN_VERSION_ghc(9,3,0)
+
     adaptUserSolve :: ( userDefs -> TcPluginSolver )
-                   -> TcPluginDefs userDefs -> GHC.EvBindsVar -> GHC.TcPluginSolver
-    adaptUserSolve userSolve ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs }) evBindsVar
-      = \ givens deriveds wanteds ->
-        tcPluginSolveM ( userSolve tcPluginUserDefs givens deriveds wanteds ) tcPluginBuiltinDefs evBindsVar
-#else
-    adaptUserSolve :: ( userDefs -> TcPluginSolver )
-                   -> TcPluginDefs userDefs -> GHC.TcPluginSolver
+                   -> TcPluginDefs userDefs
+#ifdef HAS_NEW_API
+                   -> GHC.EvBindsVar
+#endif
+                   -> GHC.TcPluginSolver
     adaptUserSolve userSolve ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs })
+#ifdef HAS_NEW_API
+      evBindsVar
+#endif
       = \ givens deriveds wanteds -> do
+#ifndef HAS_NEW_API
         evBindsVar <- GHC.getEvBindsTcPluginM
-        tcPluginSolveM ( userSolve tcPluginUserDefs givens deriveds wanteds ) tcPluginBuiltinDefs evBindsVar
+#endif
+#ifdef HAS_DERIVEDS
+        tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds ) tcPluginBuiltinDefs evBindsVar deriveds
+#else
+        tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds ) tcPluginBuiltinDefs evBindsVar
 #endif
 
-
-#if MIN_VERSION_ghc(9,3,0)
+#ifdef HAS_REWRITING
     adaptUserRewrite :: ( userDefs -> GHC.UniqFM GHC.TyCon TcPluginRewriter )
                      -> TcPluginDefs userDefs -> GHC.UniqFM GHC.TyCon GHC.TcPluginRewriter
     adaptUserRewrite userRewrite ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs })
@@ -400,10 +449,16 @@ type  MonadTcPluginTypeError :: ( Type -> Type ) -> Constraint
 class MonadTcPlugin m => MonadTcPluginTypeError m where
   askBuiltins :: m BuiltinDefs
 instance MonadTcPluginTypeError ( TcPluginM Solve ) where
-  askBuiltins = TcPluginSolveM   ( \ builtinDefs _ -> pure builtinDefs )
-#if MIN_VERSION_ghc(9,3,0)
+  askBuiltins = TcPluginSolveM
+    \ builtinDefs
+      _evBinds
+#ifdef HAS_DERIVEDS
+      _deriveds
+#endif
+    -> pure builtinDefs
+#ifdef HAS_REWRITING
 instance MonadTcPluginTypeError ( TcPluginM Rewrite ) where
-  askBuiltins = TcPluginRewriteM ( \ builtinDefs _ -> pure builtinDefs )
+  askBuiltins = TcPluginRewriteM \ builtinDefs _evBinds -> pure builtinDefs
 #endif
 
 instance TypeError ( 'Text "Cannot throw type errors in 'tcPluginInit'." )

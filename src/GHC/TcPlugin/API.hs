@@ -67,7 +67,7 @@ module GHC.TcPlugin.API
     -- ** The 'TcPlugin' type
   , TcPlugin(..), TcPluginStage(..)
   , TcPluginSolver
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_REWRITING
   , TcPluginSolveResult(..)
   , TcPluginRewriter, TcPluginRewriteResult(..)
 #else
@@ -106,7 +106,7 @@ module GHC.TcPlugin.API
     -- | The most basic type of name is the 'OccName', which is a
     -- simple textual name within a namespace (e.g. the class namespace),
     -- without any disambiguation (no module qualifier, etc).
-    , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
+  , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
 
     -- *** Names
 
@@ -142,18 +142,43 @@ module GHC.TcPlugin.API
     --
     -- When GHC can't solve a Wanted constraint, it will get reported to the
     -- user as a type error.
+
+    -- | To get started, it can be helpful to immediately print out all the constraints
+    -- that the plugin is given, using 'tcPluginTrace':
+    -- 
+    -- > solver _ givens deriveds wanteds = do
+    -- >   tcPluginTrace "---Plugin start---" (ppr givens $$ ppr deriveds $$ ppr wanteds)
+    -- >   pure $ TcPluginOk [] []
     --
-    -- (N.B. There is also a third type of constraints, Derived constraints.
-    -- These are like Wanted constraints, except that they don't require evidence
-    -- in order to be solved, and won't be seen in error messages if they go unsolved.)
+    -- This creates a plugin that prints outs the constraints it is passed,
+    -- without doing anything with them.
     --
-    -- To solve a constraint, one needs to provide evidence:
+    -- Note that pretty-printing in GHC is done using the 'Outputable' type class.
+    -- We use its 'ppr' method to turn things into pretty-printable documents,
+    -- and '($$)' to combine documents vertically.
+    -- If you need more capabilities for pretty-printing documents,
+    -- import GHC's "GHC.Utils.Outputable" module.
+  , tcPluginTrace
+
+    -- | To solve a constraint, one needs to provide evidence:
     --
     --   - a 'Coercion' witnessing an equality between two types,
     --     in order to solve an equality constraint,
     --   - an evidence term 'EvExpr', e.g. a dictionary of the methods
     --     for a typeclass constraint.
-  , newWanted, newDerived, newGiven
+  , newWanted, newGiven
+
+    -- | Derived constraints are like Wanted constraints, except that they
+    -- don't require evidence in order to be solved, and won't be seen
+    -- in error messages if they go unsolved.
+    --
+    -- Solver plugins usually ignore this type of constraint entirely.
+    -- They occur mostly when dealing with functional dependencies and type-family
+    -- injectivity annotations.
+    --
+    -- GHC 9.4 removes this flavour of constraints entirely, subsuming their uses into
+    -- Wanted constraints.
+  , askDeriveds, newDerived
     
     -- ** Predicates
     
@@ -173,7 +198,7 @@ module GHC.TcPlugin.API
     --
     -- This is the purpose of 'CtLoc'.
   , setCtLocM
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_REWRITING
   , setCtLocRewriteM
 #endif
 
@@ -254,7 +279,7 @@ module GHC.TcPlugin.API
   , getFamInstEnvs
   , FamInstEnv
 
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_REWRITING
     -- ** Specifying type family reductions
 
     -- | A plugin that wants to rewrite a type family application must provide two
@@ -322,15 +347,6 @@ module GHC.TcPlugin.API
     -- * The type-checking environment
   , getEnvs
 
-    -- * Displaying messages
-
-    -- | Most pretty-printing in GHC occurs through the 'Outputable' type class.
-    -- Use its 'ppr' method to display a type or other object that GHC knows about.
-    --
-    -- If you need more capabilities for constructing pretty-printable documents,
-    -- import GHC's "GHC.Utils.Outputable" module.
-  , tcPluginTrace
-
     -- * Built-in types
 
     -- | This module also re-exports the built-in types that GHC already knows about.
@@ -381,7 +397,7 @@ import GHC.Core.Class
   ( Class(..), FunDep )
 import GHC.Core.Coercion
   ( mkUnivCo, mkPrimEqPredRole
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_REWRITING
   , Reduction(..)
 #endif
   )
@@ -426,7 +442,7 @@ import qualified GHC.Tc.Plugin
   as GHC
 import GHC.Tc.Types
   ( TcTyThing(..), TcGblEnv(..), TcLclEnv(..)
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_REWRITING
   , TcPluginSolveResult(..), TcPluginRewriteResult(..)
   , RewriteEnv(..)
 #else
@@ -519,7 +535,7 @@ instance ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStag
 --------------------------------------------------------------------------------
 -- Backwards compatibility definitions.
 
-#if !MIN_VERSION_ghc(9,3,0)
+#if !HAS_NEW_API
 type TcPluginSolveResult = TcPluginResult
 #endif
 
@@ -610,7 +626,7 @@ getFamInstEnvs = liftTcPluginM GHC.getFamInstEnvs
 -- __Warning__: can cause a loop when used within 'tcPluginRewrite'.
 matchFam :: MonadTcPlugin m
          => TyCon -> [ TcType ]
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_REWRITING
          -> m ( Maybe Reduction )
 #else
          -> m ( Maybe ( Coercion, Type ) )
@@ -666,7 +682,7 @@ newDerived loc pty = liftTcPluginM $ GHC.newDerived loc pty
 -- as only the 'CtOrigin' gets taken into account here.
 newGiven :: CtLoc -> PredType -> EvExpr -> TcPluginM Solve CtEvidence
 newGiven loc pty evtm = do
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_NEW_API
   tc_evbinds <- askEvBinds
   liftTcPluginM $ GHC.newGiven tc_evbinds loc pty evtm
 #else
@@ -678,7 +694,7 @@ newGiven loc pty evtm = do
 setCtLocM :: MonadTcPlugin m => CtLoc -> m a -> m a
 setCtLocM loc = unsafeLiftThroughTcM ( GHC.setCtLocM loc )
 
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_REWRITING
 -- | Use the 'RewriteEnv' to set the 'CtLoc' for a computation.
 setCtLocRewriteM :: TcPluginM Rewrite a -> TcPluginM Rewrite a
 setCtLocRewriteM ma = do
@@ -699,7 +715,7 @@ newCoercionHole = liftTcPluginM . GHC.newCoercionHole
 -- | Bind an evidence variable.
 setEvBind :: EvBind -> TcPluginM Solve ()
 setEvBind ev_bind = do
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_NEW_API
   tc_evbinds <- askEvBinds
   liftTcPluginM $ GHC.setEvBind tc_evbinds ev_bind
 #else
@@ -730,7 +746,7 @@ mkPluginUnivEvTerm
   -> EvTerm
 mkPluginUnivEvTerm str role lhs rhs = evCoercion $ mkPluginUnivCo str role lhs rhs
 
-#if MIN_VERSION_ghc(9,3,0)
+#if HAS_REWRITING
 -- | Provide a rewriting of a saturated type family application
 -- at the given 'Role' ('Nominal' or 'Representational').
 --

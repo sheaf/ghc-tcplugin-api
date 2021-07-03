@@ -54,3 +54,9 @@ library
   exposed-modules:
     GHC.TcPlugin.API,
     GHC.TcPlugin.API.Internal
+
+  if impl(ghc >= 9.3.0)
+    cpp-options: -DHAS_REWRITING
+    cpp-options: -DHAS_NEW_API
+  if impl(ghc < 9.5.0)
+    cpp-options: -DHAS_DERIVEDS
