@@ -101,8 +101,10 @@ import qualified GHC.Tc.Plugin
 import qualified GHC.Tc.Types
   as GHC
     ( TcM, TcPlugin(..), TcPluginM
-    , TcPluginSolver, TcPluginRewriter
-#ifndef HAS_REWRITING
+    , TcPluginSolver
+#ifdef HAS_REWRITING
+    , TcPluginRewriter
+#else
     , getEvBindsTcPluginM
 #endif
     , runTcPluginM, unsafeTcPluginTcM

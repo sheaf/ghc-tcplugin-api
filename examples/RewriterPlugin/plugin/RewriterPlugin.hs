@@ -121,7 +121,7 @@ mkCancellableWanted ( PluginDefs { .. } ) ty = do
   env <- API.askRewriteEnv
   let
     ctLoc :: API.CtLoc
-    ctLoc = API.bumpCtLocDepth $ API.fe_loc env
+    ctLoc = API.bumpCtLocDepth $ API.rewriteEnvCtLoc env
     ctPredTy :: API.PredType
     ctPredTy = API.mkTyConApp ( API.classTyCon cancellableClass ) [ ty ]
   ctEv <- API.setCtLocM ctLoc $ API.newWanted ctLoc ctPredTy
@@ -133,6 +133,6 @@ throwTypeError msg = do
   errorTy <- API.mkTcPluginErrorTy msg
   let
     errorCtLoc :: API.CtLoc
-    errorCtLoc = API.bumpCtLocDepth $ API.fe_loc env
+    errorCtLoc = API.bumpCtLocDepth $ API.rewriteEnvCtLoc env
   errorCtEv <- API.setCtLocM errorCtLoc $ API.newWanted errorCtLoc errorTy
   pure $ API.TcPluginNoRewrite [ API.mkNonCanonical errorCtEv ]

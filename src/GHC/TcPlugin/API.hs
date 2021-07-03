@@ -292,7 +292,7 @@ module GHC.TcPlugin.API
     -- which specifies a rewriting function for each type family.
     -- Use 'emptyUFM' or 'listToUFM' to construct this map,
     -- or import the GHC module "GHC.Types.Unique.FM" for a more complete API.
-  , askRewriteEnv, RewriteEnv(..)
+  , askRewriteEnv, rewriteEnvCtLoc, RewriteEnv
   , mkTyFamAppReduction, Reduction(..)
 
     -- * Handling Haskell types
@@ -357,26 +357,26 @@ module GHC.TcPlugin.API
     -- | = END OF API DOCUMENTATION
 
     -- | == Names
-  , Name, OccName(..), TyThing(..), TcTyThing(..)
-  , Class(..), DataCon, TyCon(..), Id
+  , Name, OccName, TyThing, TcTyThing
+  , Class(classTyCon), DataCon, TyCon, Id
 
     -- | == Constraints
-  , Pred(..), EqRel(..), FunDep, CtFlavour(..)
-  , Ct(..), CtLoc(..), CtEvidence(..), CtOrigin(..)
-  , QCInst(..)
+  , Pred, EqRel(..), FunDep, CtFlavour
+  , Ct, CtLoc, CtEvidence, CtOrigin
+  , QCInst
 #if MIN_VERSION_ghc(9,2,0)
-  , CanEqLHS(..)
+  , CanEqLHS
 #endif
   , Type, PredType
-  , InstEnvs(..), TcLevel
+  , InstEnvs, TcLevel
 
     -- | === Coercions and evidence
-  , Coercion(..), Role(..), UnivCoProvenance(..)
-  , CoercionHole(..)
-  , EvBind(..), EvTerm(..), EvVar, EvExpr, EvBindsVar(..)
+  , Coercion, Role(..), UnivCoProvenance
+  , CoercionHole
+  , EvBind, EvTerm, EvVar, EvExpr, EvBindsVar
 
     -- | == The type-checking environment
-  , TcGblEnv(..), TcLclEnv(..)
+  , TcGblEnv, TcLclEnv
 
     -- | == Pretty-printing
   , SDoc, Outputable(..)
@@ -655,6 +655,16 @@ newGiven loc pty evtm = do
 #else
   liftTcPluginM $ GHC.newGiven loc pty evtm
 #endif
+
+
+-- | Obtain the 'CtLoc' from a 'RewriteEnv'.
+--
+-- This can be useful to obtain the location of the
+-- constraint currently being rewritten,
+-- so that newly emitted constraints can be given
+-- the same location information.
+rewriteEnvCtLoc :: RewriteEnv -> CtLoc
+rewriteEnvCtLoc = fe_loc
 
 -- | Set the location information for a computation,
 -- so that the constraint solver reports an error at the given location.
