@@ -63,8 +63,8 @@ tcPluginInit = do
   cancellableClass <-                                API.tcLookupClass   =<< API.lookupOrig defsModule    ( API.mkClsOcc  "Cancellable" )
   pure ( PluginDefs { .. } )
 
-tcPluginSolve :: PluginDefs -> [ API.Ct ] -> [ API.Ct ] -> [ API.Ct ] -> API.TcPluginM API.Solve API.TcPluginSolveResult
-tcPluginSolve _ _ _ _ = pure $ API.TcPluginOk [] []
+tcPluginSolve :: PluginDefs -> [ API.Ct ] -> [ API.Ct ] -> API.TcPluginM API.Solve API.TcPluginSolveResult
+tcPluginSolve _ _ _ = pure $ API.TcPluginOk [] []
 
 tcPluginStop :: PluginDefs -> API.TcPluginM API.Stop ()
 tcPluginStop _ = pure ()

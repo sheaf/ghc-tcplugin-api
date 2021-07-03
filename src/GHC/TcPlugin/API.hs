@@ -69,11 +69,11 @@ module GHC.TcPlugin.API
   , TcPluginSolver
 #if HAS_REWRITING
   , TcPluginSolveResult(..)
-  , TcPluginRewriter, TcPluginRewriteResult(..)
 #else
   , TcPluginSolveResult
   , pattern TcPluginContradiction, pattern TcPluginOk
 #endif
+  , TcPluginRewriter, TcPluginRewriteResult(..)
 
     -- ** The type-checking plugin monads
 
@@ -279,7 +279,6 @@ module GHC.TcPlugin.API
   , getFamInstEnvs
   , FamInstEnv
 
-#if HAS_REWRITING
     -- ** Specifying type family reductions
 
     -- | A plugin that wants to rewrite a type family application must provide two
@@ -296,9 +295,8 @@ module GHC.TcPlugin.API
     -- which specifies a rewriting function for each type family.
     -- Use 'emptyUFM' or 'listToUFM' to construct this map,
     -- or import the GHC module "GHC.Types.Unique.FM" for a more complete API.
-  , mkTyFamAppReduction, askRewriteEnv
-  , Reduction(..), RewriteEnv(..)
-#endif
+  , askRewriteEnv, RewriteEnv(..)
+  , mkTyFamAppReduction, Reduction(..)
 
     -- * Handling Haskell types
 
@@ -507,6 +505,9 @@ import Control.Monad.IO.Class
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API.Internal
+#ifndef HAS_REWRITING
+import GHC.TcPlugin.API.Internal.Shim
+#endif
 
 --------------------------------------------------------------------------------
 {-
@@ -532,12 +533,6 @@ type     TcPluginTypeErrorStage :: TcPluginStage -> Constraint
 class    ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStage stage
 instance ( MonadTcPluginTypeError ( TcPluginM stage ) ) => TcPluginTypeErrorStage stage
 -}
---------------------------------------------------------------------------------
--- Backwards compatibility definitions.
-
-#if !HAS_NEW_API
-type TcPluginSolveResult = TcPluginResult
-#endif
 
 --------------------------------------------------------------------------------
 
@@ -626,12 +621,12 @@ getFamInstEnvs = liftTcPluginM GHC.getFamInstEnvs
 -- __Warning__: can cause a loop when used within 'tcPluginRewrite'.
 matchFam :: MonadTcPlugin m
          => TyCon -> [ TcType ]
-#if HAS_REWRITING
          -> m ( Maybe Reduction )
-#else
-         -> m ( Maybe ( Coercion, Type ) )
+matchFam tycon args =
+#ifndef HAS_REWRITING
+  fmap mkReduction <$>
 #endif
-matchFam tycon args = liftTcPluginM $ GHC.matchFam tycon args
+  ( liftTcPluginM $ GHC.matchFam tycon args )
 
 --------------------------------------------------------------------------------
 
@@ -682,7 +677,7 @@ newDerived loc pty = liftTcPluginM $ GHC.newDerived loc pty
 -- as only the 'CtOrigin' gets taken into account here.
 newGiven :: CtLoc -> PredType -> EvExpr -> TcPluginM Solve CtEvidence
 newGiven loc pty evtm = do
-#if HAS_NEW_API
+#if HAS_REWRITING
   tc_evbinds <- askEvBinds
   liftTcPluginM $ GHC.newGiven tc_evbinds loc pty evtm
 #else
@@ -715,7 +710,7 @@ newCoercionHole = liftTcPluginM . GHC.newCoercionHole
 -- | Bind an evidence variable.
 setEvBind :: EvBind -> TcPluginM Solve ()
 setEvBind ev_bind = do
-#if HAS_NEW_API
+#if HAS_REWRITING
   tc_evbinds <- askEvBinds
   liftTcPluginM $ GHC.setEvBind tc_evbinds ev_bind
 #else
@@ -746,7 +741,6 @@ mkPluginUnivEvTerm
   -> EvTerm
 mkPluginUnivEvTerm str role lhs rhs = evCoercion $ mkPluginUnivCo str role lhs rhs
 
-#if HAS_REWRITING
 -- | Provide a rewriting of a saturated type family application
 -- at the given 'Role' ('Nominal' or 'Representational').
 --
@@ -761,4 +755,3 @@ mkTyFamAppReduction
   -> Reduction
 mkTyFamAppReduction str role tc args ty =
   Reduction ty ( mkPluginUnivCo str role ty ( mkTyConApp tc args ) )
-#endif

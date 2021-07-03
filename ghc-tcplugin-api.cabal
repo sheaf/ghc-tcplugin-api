@@ -57,6 +57,9 @@ library
 
   if impl(ghc >= 9.3.0)
     cpp-options: -DHAS_REWRITING
-    cpp-options: -DHAS_NEW_API
+  else
+    other-modules:
+      GHC.TcPlugin.API.Internal.Shim
+
   if impl(ghc < 9.5.0)
     cpp-options: -DHAS_DERIVEDS

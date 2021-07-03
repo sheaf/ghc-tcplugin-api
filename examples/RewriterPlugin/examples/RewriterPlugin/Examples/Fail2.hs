@@ -12,7 +12,7 @@ import Data.Proxy
 
 -- RewriterPlugin
 import RewriterPlugin.Definitions
-  ( Nat(..), Add, Cancellable )
+  ( Nat(..), Add )
 
 --------------------------------------------------------------------------------
 

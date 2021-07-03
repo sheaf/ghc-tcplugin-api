@@ -31,9 +31,8 @@ common ghc-api
 
   build-depends:
     ghc
-      >= 9.3 && < 9.5,
+      >= 9.0 && < 9.5,
     ghc-tcplugin-api
-
 
 
 library

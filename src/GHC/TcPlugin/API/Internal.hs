@@ -49,9 +49,8 @@ module GHC.TcPlugin.API.Internal
   , TcPluginSolver
   , TcPluginM(..)
   , TcPluginErrorMessage(..)
-#ifdef HAS_REWRITING
-  , TcPluginRewriter, askRewriteEnv
-#endif
+  , TcPluginRewriter
+  , askRewriteEnv
   , askDeriveds
   , askEvBinds
   , mkTcPlugin
@@ -104,7 +103,6 @@ import qualified GHC.Tc.Types
     , TcPluginRewriter, TcPluginRewriteResult
     , RewriteEnv
 #else
-    , TcPluginResult
     , getEvBindsTcPluginM
 #endif
     , runTcPluginM, unsafeTcPluginTcM
@@ -118,11 +116,9 @@ import qualified GHC.Tc.Types.Evidence
 import qualified GHC.Types.Name.Occurrence
   as GHC
     ( mkDataOcc, mkTcOcc )
-#ifdef HAS_REWRITING
 import qualified GHC.Types.Unique.FM
   as GHC
     ( UniqFM )
-#endif
 #if MIN_VERSION_ghc(9,2,0)
 import qualified GHC.Unit.Finder
   as GHC
@@ -131,6 +127,15 @@ import qualified GHC.Unit.Finder
 import qualified GHC.Driver.Finder
   as GHC
     ( FindResult(..) )
+#endif
+
+-- ghc-tcplugin-api
+#ifndef HAS_REWRITING
+import GHC.TcPlugin.API.Internal.Shim
+  ( TcPluginSolveResult, TcPluginRewriteResult(..)
+  , RewriteEnv
+  , shimRewriter
+  )
 #endif
 
 --------------------------------------------------------------------------------
@@ -150,13 +155,8 @@ data TcPluginStage
 type TcPluginSolver
   =  [GHC.Ct] -- ^ Givens
   -> [GHC.Ct] -- ^ Wanteds
-#ifdef HAS_REWRITING
-  -> TcPluginM Solve GHC.TcPluginSolveResult
-#else
-  -> TcPluginM Solve GHC.TcPluginResult
-#endif
+  -> TcPluginM Solve TcPluginSolveResult
 
-#ifdef HAS_REWRITING
 -- | For rewriting type family applications, a type-checking plugin provides
 -- a function of this type for each type family 'GHC.Core.TyCon.TyCon'.
 -- 
@@ -166,8 +166,7 @@ type TcPluginSolver
 type TcPluginRewriter
   =  [GHC.Ct]     -- ^ Givens
   -> [GHC.Type]   -- ^ Type family arguments (saturated)
-  -> TcPluginM Rewrite GHC.TcPluginRewriteResult
-#endif
+  -> TcPluginM Rewrite TcPluginRewriteResult
 
 -- | A record containing all the stages necessary for the
 -- operation of a type-checking plugin, as defined in this API.
@@ -207,7 +206,6 @@ data TcPlugin = forall s. TcPlugin
       -- Use @ \\ _ _ _ _ -> pure $ TcPluginOK [] [] @ if your plugin
       -- does not provide this functionality.
 
-#ifdef HAS_REWRITING
   , tcPluginRewrite :: s -> GHC.UniqFM GHC.TyCon TcPluginRewriter
     -- ^ Rewrite saturated type family applications.
     --
@@ -219,7 +217,6 @@ data TcPlugin = forall s. TcPlugin
     -- See 'TcPluginRewriter' for the expected shape of such a function.
     --
     -- Use @ const emptyUFM @ if your plugin does not provide this functionality.
-#endif
 
   , tcPluginStop    :: s -> TcPluginM Stop ()
    -- ^ Clean up after the plugin, when exiting the type-checker.
@@ -243,12 +240,10 @@ newtype instance TcPluginM Solve a =
   deriving ( Functor, Applicative, Monad )
     via ( ReaderT BuiltinDefs ( ReaderT GHC.EvBindsVar GHC.TcPluginM ) )
 #endif
-#ifdef HAS_REWRITING
 newtype instance TcPluginM Rewrite a =
-  TcPluginRewriteM { tcPluginRewriteM :: BuiltinDefs -> GHC.RewriteEnv -> GHC.TcPluginM a }
+  TcPluginRewriteM { tcPluginRewriteM :: BuiltinDefs -> RewriteEnv -> GHC.TcPluginM a }
   deriving ( Functor, Applicative, Monad )
-    via ( ReaderT BuiltinDefs ( ReaderT GHC.RewriteEnv GHC.TcPluginM ) )
-#endif
+    via ( ReaderT BuiltinDefs ( ReaderT RewriteEnv GHC.TcPluginM ) )
 newtype instance TcPluginM Stop a =
   TcPluginStopM { tcPluginStopM :: GHC.TcPluginM a }
   deriving newtype ( Functor, Applicative, Monad )
@@ -276,13 +271,11 @@ askDeriveds =
   pure []
 #endif
 
-#ifdef HAS_REWRITING
 -- | Ask for the current rewriting environment.
 --
 -- Only available in the rewriter part of the type-checking plugin.
-askRewriteEnv :: TcPluginM Rewrite GHC.RewriteEnv
+askRewriteEnv :: TcPluginM Rewrite RewriteEnv
 askRewriteEnv = TcPluginRewriteM ( \ _ rewriteEnv -> pure rewriteEnv )
-#endif
 
 -- | A 'MonadTcPlugin' is essentially a reader monad over GHC's 'GHC.Tc.TcM' monad.
 --
@@ -320,7 +313,7 @@ instance MonadTcPlugin ( TcPluginM Init ) where
   liftTcPluginM = TcPluginInitM
   unsafeWithRunInTcM runInTcM
     = unsafeLiftTcM $ runInTcM
-#ifdef HAS_NEW_API
+#ifdef HAS_REWRITING
       ( GHC.runTcPluginM . tcPluginInitM )
 #else
       ( ( `GHC.runTcPluginM` ( error "tcPluginInit: cannot access EvBindsVar" ) ) . tcPluginInitM ) 
@@ -341,7 +334,7 @@ instance MonadTcPlugin ( TcPluginM Solve ) where
 #endif
       ->
         GHC.unsafeTcPluginTcM $ runInTcM
-#ifdef HAS_NEW_API
+#ifdef HAS_REWRITING
           ( GHC.runTcPluginM
 #ifdef HAS_DERIVEDS
           . ( \ f -> f builtinDefs evBinds deriveds )
@@ -350,21 +343,28 @@ instance MonadTcPlugin ( TcPluginM Solve ) where
 #endif
           . tcPluginSolveM )
 #else
-          ( ( `GHC.runTcPluginM` evBinds ) . ( \ f -> f builtinDefs evBinds deriveds ) . tcPluginSolveM )
+          ( ( `GHC.runTcPluginM` evBinds )
+          . ( \ f -> f builtinDefs evBinds deriveds )
+          . tcPluginSolveM
+          )
 #endif
-#ifdef HAS_REWRITING
 instance MonadTcPlugin ( TcPluginM Rewrite ) where
   liftTcPluginM = TcPluginRewriteM . ( \ ma _ _ -> ma )
   unsafeWithRunInTcM runInTcM
     = TcPluginRewriteM \ builtinDefs rewriteEnv ->
       GHC.unsafeTcPluginTcM $ runInTcM
-        ( GHC.runTcPluginM . ( \ f -> f builtinDefs rewriteEnv ) . tcPluginRewriteM )
+#ifdef HAS_REWRITING
+        ( GHC.runTcPluginM
+#else
+        ( ( `GHC.runTcPluginM` ( error "tcPluginRewrite: cannot access EvBindsVar" ) )
 #endif
+        . ( \ f -> f builtinDefs rewriteEnv )
+        . tcPluginRewriteM )
 instance MonadTcPlugin ( TcPluginM Stop ) where
   liftTcPluginM = TcPluginStopM
   unsafeWithRunInTcM runInTcM
     = unsafeLiftTcM $ runInTcM 
-#ifdef HAS_NEW_API
+#ifdef HAS_REWRITING
       ( GHC.runTcPluginM . tcPluginStopM )
 #else
       ( ( `GHC.runTcPluginM` ( error "tcPluginStop: cannot access EvBindsVar" ) ) . tcPluginStopM )
@@ -382,17 +382,18 @@ mkTcPlugin :: TcPlugin -> GHC.TcPlugin
 mkTcPlugin ( TcPlugin
               { tcPluginInit = tcPluginInit :: TcPluginM Init userDefs
               , tcPluginSolve
-#ifdef HAS_REWRITING
               , tcPluginRewrite
-#endif
               , tcPluginStop
               }
            ) =
   GHC.TcPlugin
     { GHC.tcPluginInit    = adaptUserInit    tcPluginInit
-    , GHC.tcPluginSolve   = adaptUserSolve   tcPluginSolve
 #ifdef HAS_REWRITING
+    , GHC.tcPluginSolve   = adaptUserSolve   tcPluginSolve
     , GHC.tcPluginRewrite = adaptUserRewrite tcPluginRewrite
+#else
+    , GHC.tcPluginSolve   = adaptUserSolveAndRewrite
+                              tcPluginSolve tcPluginRewrite
 #endif
     , GHC.tcPluginStop    = adaptUserStop    tcPluginStop
     }
@@ -403,36 +404,56 @@ mkTcPlugin ( TcPlugin
       tcPluginUserDefs    <- tcPluginInitM userInit
       pure ( TcPluginDefs { tcPluginBuiltinDefs, tcPluginUserDefs })
 
+#ifdef HAS_REWRITING
     adaptUserSolve :: ( userDefs -> TcPluginSolver )
                    -> TcPluginDefs userDefs
-#ifdef HAS_NEW_API
-                   -> GHC.EvBindsVar
-#endif
                    -> GHC.TcPluginSolver
-    adaptUserSolve userSolve ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs })
-#ifdef HAS_NEW_API
-      evBindsVar
-#endif
-      = \ givens deriveds wanteds -> do
-#ifndef HAS_NEW_API
-        evBindsVar <- GHC.getEvBindsTcPluginM
-#endif
+    adaptUserSolve userSolve ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs } ) evBindsVar
 #ifdef HAS_DERIVEDS
-        tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds ) tcPluginBuiltinDefs evBindsVar deriveds
+      = \ givens deriveds wanteds -> do
+        tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds )
+          tcPluginBuiltinDefs evBindsVar deriveds
 #else
-        tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds ) tcPluginBuiltinDefs evBindsVar
+      = \ givens _deriveds wanteds -> do
+        tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds )
+          tcPluginBuiltinDefs evBindsVar
 #endif
 
-#ifdef HAS_REWRITING
     adaptUserRewrite :: ( userDefs -> GHC.UniqFM GHC.TyCon TcPluginRewriter )
                      -> TcPluginDefs userDefs -> GHC.UniqFM GHC.TyCon GHC.TcPluginRewriter
     adaptUserRewrite userRewrite ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs })
-      = fmap ( \ userRewriter rewriteEnv givens tys -> tcPluginRewriteM ( userRewriter givens tys ) tcPluginBuiltinDefs rewriteEnv )
+      = fmap
+          ( \ userRewriter rewriteEnv givens tys ->
+            tcPluginRewriteM ( userRewriter givens tys ) tcPluginBuiltinDefs rewriteEnv
+          )
           ( userRewrite tcPluginUserDefs )
+#else
+    adaptUserSolveAndRewrite
+      :: ( userDefs -> TcPluginSolver )
+      -> ( userDefs -> GHC.UniqFM GHC.TyCon TcPluginRewriter )
+      -> TcPluginDefs userDefs
+      -> GHC.TcPluginSolver
+    adaptUserSolveAndRewrite userSolve userRewrite ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs } )
+      = \ givens deriveds wanteds -> do
+        evBindsVar <- GHC.getEvBindsTcPluginM
+        shimRewriter
+          givens deriveds wanteds
+          ( fmap
+              ( \ userRewriter rewriteEnv gs tys ->
+                tcPluginRewriteM ( userRewriter gs tys )
+                  tcPluginBuiltinDefs rewriteEnv
+              )
+              ( userRewrite tcPluginUserDefs )
+          )
+          ( \ gs ds ws ->
+            tcPluginSolveM ( userSolve tcPluginUserDefs gs ws )
+              tcPluginBuiltinDefs evBindsVar ds
+          )
 #endif
 
     adaptUserStop :: ( userDefs -> TcPluginM Stop () ) -> TcPluginDefs userDefs -> GHC.TcPluginM ()
-    adaptUserStop userStop ( TcPluginDefs { tcPluginUserDefs } ) = tcPluginStopM $ userStop tcPluginUserDefs
+    adaptUserStop userStop ( TcPluginDefs { tcPluginUserDefs } ) =
+      tcPluginStopM $ userStop tcPluginUserDefs
 
 -- | Monads for type-checking plugins which are able to throw type errors.
 --
@@ -456,10 +477,8 @@ instance MonadTcPluginTypeError ( TcPluginM Solve ) where
       _deriveds
 #endif
     -> pure builtinDefs
-#ifdef HAS_REWRITING
 instance MonadTcPluginTypeError ( TcPluginM Rewrite ) where
   askBuiltins = TcPluginRewriteM \ builtinDefs _evBinds -> pure builtinDefs
-#endif
 
 instance TypeError ( 'Text "Cannot throw type errors in 'tcPluginInit'." )
       => MonadTcPluginTypeError ( TcPluginM Init ) where
