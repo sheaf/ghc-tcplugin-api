@@ -69,8 +69,14 @@ import Control.Monad.Trans.Reader
   ( ReaderT(..) )
 
 -- ghc
-import qualified GHC
-    ( mkModuleName )
+import qualified GHC.Builtin.Names
+  as GHC.TypeLits
+    ( errorMessageTypeErrorFamName
+    , typeErrorTextDataConName
+    , typeErrorAppendDataConName
+    , typeErrorVAppendDataConName
+    , typeErrorShowTypeDataConName
+    )
 import qualified GHC.Builtin.Types
   as GHC
     ( constraintKind )
@@ -91,9 +97,7 @@ import qualified GHC.Data.FastString
     ( fsLit )
 import qualified GHC.Tc.Plugin
   as GHC
-    ( findImportedModule
-    , lookupOrig, tcLookupDataCon, tcLookupTyCon
-    )
+    ( tcLookupDataCon, tcLookupTyCon )
 import qualified GHC.Tc.Types
   as GHC
     ( TcM, TcPlugin(..), TcPluginM
@@ -113,21 +117,9 @@ import qualified GHC.Tc.Types.Constraint
 import qualified GHC.Tc.Types.Evidence
   as GHC
     ( EvBindsVar )
-import qualified GHC.Types.Name.Occurrence
-  as GHC
-    ( mkDataOcc, mkTcOcc )
 import qualified GHC.Types.Unique.FM
   as GHC
     ( UniqFM )
-#if MIN_VERSION_ghc(9,2,0)
-import qualified GHC.Unit.Finder
-  as GHC
-    ( FindResult(..) )
-#else
-import qualified GHC.Driver.Finder
-  as GHC
-    ( FindResult(..) )
-#endif
 
 -- ghc-tcplugin-api
 #ifndef HAS_REWRITING
@@ -461,10 +453,7 @@ mkTcPlugin ( TcPlugin
 -- and 'tcPluginRewrite' use; it is not possible to throw type errors
 -- in 'tcPluginInit' or 'tcPluginStop'.
 --
--- Note that the method of this typeclass is not exported,
--- as it is only used internally.
---
--- 'mkTcPluginErrorTy' is an example of an exported function that
+-- 'mkTcPluginErrorTy' is an example of a function that
 -- uses this typeclass.
 type  MonadTcPluginTypeError :: ( Type -> Type ) -> Constraint
 class MonadTcPlugin m => MonadTcPluginTypeError m where
@@ -539,16 +528,11 @@ data TcPluginDefs s
 
 initBuiltinDefs :: GHC.TcPluginM BuiltinDefs
 initBuiltinDefs = do
-  findTypeLits   <- GHC.findImportedModule ( GHC.mkModuleName "GHC.TypeLits" ) ( Just $ GHC.fsLit "base" )
-  typeLitsModule <- case findTypeLits of
-    GHC.Found _ res     -> pure res
-    GHC.FoundMultiple _ -> error $ "ghc-tcplugin-api: found multiple modules named 'GHC.TypeLits' in 'base' package."
-    _                   -> error $ "ghc-tcplugin-api: could not find any module named 'GHC.TypeLits' in 'base' package."
-  typeErrorTyCon  <-                           GHC.tcLookupTyCon   =<< GHC.lookupOrig typeLitsModule ( GHC.mkTcOcc   "TypeError" )
-  textTyCon       <- fmap GHC.promoteDataCon . GHC.tcLookupDataCon =<< GHC.lookupOrig typeLitsModule ( GHC.mkDataOcc "Text"      )
-  showTypeTyCon   <- fmap GHC.promoteDataCon . GHC.tcLookupDataCon =<< GHC.lookupOrig typeLitsModule ( GHC.mkDataOcc "ShowType"  )
-  concatTyCon     <- fmap GHC.promoteDataCon . GHC.tcLookupDataCon =<< GHC.lookupOrig typeLitsModule ( GHC.mkDataOcc ":<>:"      )
-  vcatTyCon       <- fmap GHC.promoteDataCon . GHC.tcLookupDataCon =<< GHC.lookupOrig typeLitsModule ( GHC.mkDataOcc ":$$:"      )
+  typeErrorTyCon  <-                           GHC.tcLookupTyCon   GHC.TypeLits.errorMessageTypeErrorFamName
+  textTyCon       <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorTextDataConName
+  showTypeTyCon   <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorShowTypeDataConName
+  concatTyCon     <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorAppendDataConName
+  vcatTyCon       <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorVAppendDataConName
   pure ( BuiltinDefs { .. } )
 
 interpretErrorMessage :: BuiltinDefs -> TcPluginErrorMessage -> GHC.PredType
