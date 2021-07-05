@@ -361,7 +361,7 @@ module GHC.TcPlugin.API
   , Class(classTyCon), DataCon, TyCon, Id
 
     -- | == Constraints
-  , Pred, EqRel(..), FunDep, CtFlavour
+  , Pred(..), EqRel(..), FunDep, CtFlavour
   , Ct, CtLoc, CtEvidence, CtOrigin
   , QCInst
 #if MIN_VERSION_ghc(9,2,0)
