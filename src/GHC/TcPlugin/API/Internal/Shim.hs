@@ -437,8 +437,8 @@ try_to_reduce :: TyCon -> [Type] -> Maybe Rewriter
 try_to_reduce tc tys mb_rewriter = do
   result <-
     firstJustsM
-      [ liftTcS $ mkRed <$> lookupFamAppCache tc tys
-      , runTcPluginRewriter mb_rewriter tc tys
+      [ runTcPluginRewriter mb_rewriter tc tys
+      , liftTcS $ mkRed <$> lookupFamAppCache tc tys
       , liftTcS $ mkRed <$> matchFam tc tys ]
   forM result downgrade
     where
@@ -773,12 +773,6 @@ addRewriting tc tys mbRedn newCts = RewriteM \ _rws _env cacheRef ( RewriteState
         newRewritings = insertFunEq rewritings tc tys ( mbRedn, newCts )
       liftIOTcS $ writeIORef cacheRef newRewritings
       pure ( mbRedn , RewriteState ( cts <> newCts ) s' )
-
-{-
-addWork new = RewriteM \ _rws _env famApps ( cts, s ) -> do
-  
-  pure ( (), ( cts `appendDList` new , s ) )
--}
 
 -- Silly workaround because wrapTcS is not exported in GHC 9.0
 liftIOTcS :: IO a -> TcS a
