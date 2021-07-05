@@ -59,6 +59,10 @@ module GHC.TcPlugin.API.Internal
   where
 
 -- base
+#ifndef HAS_REWRITING
+import Data.IORef
+  ( IORef, newIORef )
+#endif
 import Data.Kind
   ( Constraint, Type )
 import GHC.TypeLits
@@ -97,7 +101,11 @@ import qualified GHC.Data.FastString
     ( fsLit )
 import qualified GHC.Tc.Plugin
   as GHC
-    ( tcLookupDataCon, tcLookupTyCon )
+    ( tcLookupDataCon, tcLookupTyCon
+#ifndef HAS_REWRITING
+    , tcPluginIO
+#endif
+    )
 import qualified GHC.Tc.Types
   as GHC
     ( TcM, TcPlugin(..), TcPluginM
@@ -125,12 +133,17 @@ import qualified GHC.Tc.Types.Evidence
 import qualified GHC.Types.Unique.FM
   as GHC
     ( UniqFM )
+#ifndef HAS_REWRITING
+import qualified GHC.Types.Unique.DFM
+  as GHC
+    ( emptyUDFM )
+#endif
 
 -- ghc-tcplugin-api
 #ifndef HAS_REWRITING
 import GHC.TcPlugin.API.Internal.Shim
   ( TcPluginSolveResult, TcPluginRewriteResult(..)
-  , RewriteEnv
+  , RewrittenTyFamApps, RewriteEnv
   , shimRewriter
   )
 #endif
@@ -437,6 +450,7 @@ mkTcPlugin ( TcPlugin
         evBindsVar <- GHC.getEvBindsTcPluginM
         shimRewriter
           givens deriveds wanteds
+          ( rewrittenTyFamsIORef tcPluginBuiltinDefs )
           ( fmap
               ( \ userRewriter rewriteEnv gs tys ->
                 tcPluginRewriteM ( userRewriter gs tys )
@@ -526,6 +540,9 @@ data BuiltinDefs =
     , showTypeTyCon  :: !GHC.TyCon
     , concatTyCon    :: !GHC.TyCon
     , vcatTyCon      :: !GHC.TyCon
+#ifndef HAS_REWRITING
+    , rewrittenTyFamsIORef :: IORef RewrittenTyFamApps
+#endif
     }
 
 data TcPluginDefs s
@@ -541,6 +558,9 @@ initBuiltinDefs = do
   showTypeTyCon   <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorShowTypeDataConName
   concatTyCon     <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorAppendDataConName
   vcatTyCon       <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorVAppendDataConName
+#ifndef HAS_REWRITING
+  rewrittenTyFamsIORef <- GHC.tcPluginIO $ newIORef GHC.emptyUDFM
+#endif
   pure ( BuiltinDefs { .. } )
 
 interpretErrorMessage :: BuiltinDefs -> TcPluginErrorMessage -> GHC.PredType
