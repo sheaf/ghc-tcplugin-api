@@ -23,6 +23,7 @@ import RewriterPlugin.Definitions
 --
 -- This shows that the rewriting occurs even when when no rewriting is necessary
 -- for the type signature to typecheck.
+-- (This test fails to fail with the GHC 9.0 & 9.2 compatibility shim.)
 
-fail5 :: Proxy ( Add 'Zero b ) -> Proxy ( Add 'Zero b )
-fail5 px = px
+fail5 :: Proxy b -> Proxy ( Add 'Zero b ) -> Proxy ( Add 'Zero b )
+fail5 _ px = px
