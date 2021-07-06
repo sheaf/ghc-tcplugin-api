@@ -133,20 +133,38 @@ module GHC.TcPlugin.API
     -- e.g. solve constraints that GHC can't solve on its own, or emit
     -- their own constraints.
     --
-    -- There are two main types of constraints:
+    -- There are two different constraint flavours:
     --
-    --   - Given constraints, which
-    --     are already known and have evidence associated to them,
+    --   - Given constraints, which are already known and
+    --     have evidence associated to them,
     --   - Wanted constraints, for which evidence has not yet been found.
     --
     -- When GHC can't solve a Wanted constraint, it will get reported to the
     -- user as a type error.
 
+    -- | The 'tcPluginSolve' method of a typechecker plugin will be invoked
+    -- in two different ways:
+    --
+    -- 1. to simplify Given constraints. In this case, the 'tcPluginSolve' function
+    --    will not be passed any Wanted constraints, and
+    -- 2. to solve Wanted constraints.
+    --
+    -- The plugin can then respond in one of two ways:
+    -- 
+    --   - with @TcPluginOk solved new@, where @solved@ is a list of solved constraints
+    --     and @new@ is a list of new constraints for GHC to process;
+    --   - with @TcPluginContradiction contras@, where @contras@ is a list of impossible
+    --     constraints, so that they can be turned into errors.
+    --
+    -- In both cases, the plugin must respond with constraints of the same flavour,
+    -- i.e. in (1) it should return only Givens, and for (2) it should return only
+    -- Wanteds; all other constraints will be ignored.
+
     -- | To get started, it can be helpful to immediately print out all the constraints
     -- that the plugin is given, using 'tcPluginTrace':
     -- 
-    -- > solver _ givens deriveds wanteds = do
-    -- >   tcPluginTrace "---Plugin start---" (ppr givens $$ ppr deriveds $$ ppr wanteds)
+    -- > solver _ givens wanteds = do
+    -- >   tcPluginTrace "---Plugin start---" (ppr givens $$ ppr wanteds)
     -- >   pure $ TcPluginOk [] []
     --
     -- This creates a plugin that prints outs the constraints it is passed,
