@@ -1,0 +1,48 @@
+cabal-version:  3.0
+name:           system-f
+version:        0.1.0.0
+synopsis:       Intrinsically typed System F using typechecking plugins
+license:        BSD-3-Clause
+build-type:     Simple
+author:         Sam Derbyshire
+maintainer:     Sam Derbyshire
+copyright:      2021 Sam Derbyshire
+
+common common
+
+  build-depends:
+    base
+      >= 4.15.0 && < 4.18,
+    ghc
+      >= 9.0 && < 9.5,
+    ghc-tcplugin-api
+
+  default-language:
+    Haskell2010
+
+  ghc-options:
+    -O1
+    -Wall
+    -Wcompat
+    -fwarn-missing-local-signatures
+    -fwarn-incomplete-uni-patterns
+    -fwarn-missing-deriving-strategies
+    -fno-warn-unticked-promoted-constructors
+    -dcore-lint
+
+library
+
+  import:
+    common
+
+  hs-source-dirs:
+    src
+
+  exposed-modules:
+    SystemF.Examples
+    SystemF.Plugin
+    SystemF.Plugin.Test
+    SystemF.Term
+    SystemF.Term.Substitution
+    SystemF.Term.Evaluation
+    SystemF.Type

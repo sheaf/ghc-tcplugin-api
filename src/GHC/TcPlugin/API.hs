@@ -169,6 +169,10 @@ module GHC.TcPlugin.API
     --
     -- This creates a plugin that prints outs the constraints it is passed,
     -- without doing anything with them.
+    -- 
+    -- To see this output, you will need to pass the flags @-ddump-tc-trace@
+    -- and @-ddump-to-file@ to GHC. This will output the trace as a log file,
+    -- and you can search for @"---Plugin start---"@ to find the plugin inputs.
     --
     -- Note that pretty-printing in GHC is done using the 'Outputable' type class.
     -- We use its 'ppr' method to turn things into pretty-printable documents,
@@ -242,7 +246,7 @@ module GHC.TcPlugin.API
     -- whether in canonical form or not.
     -- In order to handle these constraints in a uniform manner, it is usually
     -- preferable to inspect each constraint's predicate, which can be obtained
-    -- by using `ctPred`'classifyPredType'.
+    -- by using 'classifyPredType' and 'ctPred'.
   , classifyPredType, ctPred
   , eqType
   , ctLoc, ctEvidence, ctFlavour, ctEqRel, ctOrigin
@@ -257,7 +261,9 @@ module GHC.TcPlugin.API
     -- to construct the associated coercions.
   , mkPluginUnivCo
   , newCoercionHole
-  , mkUnivCo
+  , mkReflCo, mkSymCo, mkTransCo, mkUnivCo
+  , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
+  , pattern Coercion
 
     -- *** Evidence terms
 
@@ -271,6 +277,7 @@ module GHC.TcPlugin.API
   , mkPluginUnivEvTerm
   , newEvVar, setEvBind
   , evCoercion
+  , pattern Type
 --, askEvBinds
 
     -- *** Class dictionaries
@@ -320,7 +327,7 @@ module GHC.TcPlugin.API
   , newFlexiTyVar
   , isTouchableTcPluginM
   , mkTyVarTy, mkTyVarTys
-  , getTyVar_maybe
+  , isTyVarTy, getTyVar_maybe
   , TcType, TcTyVar, Unique, Kind
 
     -- ** Creating and decomposing applications
@@ -406,10 +413,13 @@ module GHC.TcPlugin.API
 import GHC
   ( TyThing(..) )
 import GHC.Builtin.Types
+import GHC.Core
+  ( Expr(Type, Coercion) )
 import GHC.Core.Class
   ( Class(..), FunDep )
 import GHC.Core.Coercion
-  ( mkUnivCo, mkPrimEqPredRole
+  ( mkReflCo, mkSymCo, mkTransCo
+  , mkUnivCo, mkPrimEqPredRole
 #if HAS_REWRITING
   , Reduction(..)
 #endif
@@ -447,7 +457,8 @@ import GHC.Core.TyCo.Rep
   )
 import GHC.Core.Type
   ( eqType, mkTyConTy, mkTyConApp, splitTyConApp_maybe
-  , mkAppTy, mkAppTys, getTyVar_maybe
+  , mkAppTy, mkAppTys, isTyVarTy, getTyVar_maybe
+  , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
   )
 import GHC.Data.FastString
   ( FastString, fsLit )
