@@ -42,7 +42,7 @@ import Control.Monad.Trans.State.Strict
 -- ghc
 import GHC.Core.Coercion
   ( castCoercionKind1
-  , mkReflCo, mkSymCo, mkUnivCo, mkFunCo, mkHomoForAllCos
+  , mkReflCo, mkSymCo, mkFunCo, mkHomoForAllCos
   , mkTransCo, mkAppCos, mkNomReflCo, mkSubCo
   , mkTyConAppCo, tyConRolesX
   , tyConRolesRepresentational
@@ -61,7 +61,7 @@ import GHC.Core.Map
 import GHC.Core.Predicate
   ( EqRel(..), eqRelRole )
 import GHC.Core.TyCo.Rep
-  ( Type(..), Kind, Coercion(..), UnivCoProvenance(PluginProv)
+  ( Type(..), Kind, Coercion(..)
   , TyCoBinder(..)
   , MCoercion(..), MCoercionN
   , binderVars, mkForAllTys
@@ -123,12 +123,12 @@ import GHC.Tc.Types.Constraint
   , CanEqLHS(..)
 #endif
   , ctLoc, ctFlavour, ctEvidence, ctEqRel, ctEvPred
-  , ctEvCoercion, ctEvFlavour
+  , ctEvExpr, ctEvCoercion, ctEvFlavour
   , bumpCtLocDepth, eqCanRewriteFR, mkNonCanonical
   )
 import GHC.Tc.Types.Evidence
-  ( EvTerm, Role(..)
-  , evCoercion
+  ( EvTerm(..), Role(..)
+  , evCast
   , mkTcReflCo, mkTcTransCo, mkTcSymCo
   , mkTcTyConAppCo
   , tcDowngradeRole
@@ -250,16 +250,12 @@ reduceCt cacheRef rewriters ct = do
   ( res, newCts ) <- runRewritePluginM rewriters rewriteEnv cacheRef ( rewrite_one predTy )
   case res of
     Nothing -> pure ( Nothing, newCts, ct )
-    Just ( Reduction predTy' _ ) -> do
+    Just ( Reduction predTy' co ) -> do
       ctEv' <- case ctFlavour ct of
         Given     -> error "ghc-tcplugin-api: unexpected Given in reduceCt"
         Wanted {} -> newWanted  ( ctLoc ct ) predTy'
         Derived   -> newDerived ( ctLoc ct ) predTy'
-      let
-        evTerm :: EvTerm
-        evTerm = evCoercion $ mkUnivCo ( PluginProv "ghc-tcplugin-api (shim)" ) Nominal predTy' predTy
-      pure ( Just ( evTerm, ct ), newCts, mkNonCanonical ctEv' )
-
+      pure ( Just ( evCast ( ctEvExpr ctEv' ) co, ct ), newCts, mkNonCanonical ctEv' )
 
 traverseCts :: Monad m
             => ( a -> m ( Maybe b, [c], d ) )

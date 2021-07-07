@@ -276,7 +276,8 @@ module GHC.TcPlugin.API
 
   , mkPluginUnivEvTerm
   , newEvVar, setEvBind
-  , evCoercion
+  , evCoercion, evCast
+  , ctEvExpr
   , pattern Type
 --, askEvBinds
 
@@ -479,14 +480,14 @@ import GHC.Tc.Types.Constraint
 #if MIN_VERSION_ghc(9,2,0)
   , CanEqLHS(..)
 #endif
-  , ctPred, ctLoc, ctEvidence
+  , ctPred, ctLoc, ctEvidence, ctEvExpr
   , ctFlavour, ctEqRel, ctOrigin
   , bumpCtLocDepth
   , mkNonCanonical
   )
 import GHC.Tc.Types.Evidence
   ( EvBind(..), EvTerm(..), EvExpr, EvBindsVar(..)
-  , evCoercion
+  , evCoercion, evCast
   )
 import GHC.Tc.Types.Origin
   ( CtOrigin(..) )
