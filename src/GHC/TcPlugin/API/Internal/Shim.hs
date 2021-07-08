@@ -222,13 +222,13 @@ shimRewriter :: [Ct] -> [Ct] -> [Ct]
              -> Rewriters
              -> ( [Ct] -> [Ct] -> [Ct] -> TcPluginM TcPluginSolveResult )
              -> TcPluginM TcPluginSolveResult
-shimRewriter givens deriveds wanteds cacheRef rewriters solver
-  | isNullUFM rewriters
+shimRewriter givens deriveds wanteds cacheRef rws solver
+  | isNullUFM rws
   = solver givens deriveds wanteds
   | otherwise
   = do
-    ( solvedDeriveds, newCts1, deriveds') <- traverseCts ( reduceCt cacheRef rewriters givens ) deriveds
-    ( solvedWanteds , newCts2, wanteds' ) <- traverseCts ( reduceCt cacheRef rewriters givens ) wanteds
+    ( solvedDeriveds, newCts1, deriveds') <- traverseCts ( reduceCt cacheRef rws givens ) deriveds
+    ( solvedWanteds , newCts2, wanteds' ) <- traverseCts ( reduceCt cacheRef rws givens ) wanteds
     res <- solver givens deriveds' wanteds'
     case res of
       contra@( TcPluginContradiction {} )
@@ -244,13 +244,15 @@ reduceCt :: IORef RewrittenTyFamApps
          -> [Ct]
          -> Ct
          -> TcPluginM ( Maybe (EvTerm, Ct), [Ct], Ct )
-reduceCt cacheRef rewriters givens ct = do
+reduceCt cacheRef rws givens ct = do
   let
     predTy :: Type
     predTy = ctEvPred ( ctEvidence ct )
-    rewriteEnv :: RewriteEnv
-    rewriteEnv = FE ( ctLoc ct ) ( ctFlavour ct ) ( ctEqRel ct )
-  ( res, newCts ) <- runRewritePluginM rewriters rewriteEnv givens cacheRef ( rewrite_one predTy )
+    rwEnv :: RewriteEnv
+    rwEnv = FE ( ctLoc ct ) ( ctFlavour ct ) ( ctEqRel ct )
+    shimRewriteEnv :: ShimRewriteEnv
+    shimRewriteEnv = ShimRewriteEnv rws rwEnv ct givens cacheRef
+  ( res, newCts ) <- runRewritePluginM shimRewriteEnv ( rewrite_one predTy )
   case res of
     Nothing -> pure ( Nothing, newCts, ct )
     Just ( Reduction predTy' co ) -> do
@@ -375,10 +377,10 @@ rewrite_fam_app tc tys = do
 rewrite_exact_fam_app :: TyCon -> [Type] -> RewriteM Reduction
 rewrite_exact_fam_app tc tys = do
   checkStackDepth (mkTyConApp tc tys)
-  rewriters <- getRewriters
+  rws <- getRewriters
   let
     mbRewriter :: Maybe Rewriter
-    mbRewriter = lookupUFM rewriters tc
+    mbRewriter = lookupUFM rws tc
   result1 <- try_to_reduce tc tys mbRewriter
   case result1 of
     Just redn -> finish False redn
@@ -464,8 +466,8 @@ runTcPluginRewriter mbRewriter tc tys =
   where
   runRewriter :: Rewriter -> RewriteM (Maybe Reduction)
   runRewriter rewriter = do
-    rewriteResult <- RewriteM \ _rws rewriteEnv givens _cache s -> do
-      res <- runTcPluginTcS ( rewriter rewriteEnv givens tys )
+    rewriteResult <- RewriteM \ env s -> do
+      res <- runTcPluginTcS ( rewriter ( rewriteEnv env ) ( rewriteGivens env ) tys )
       pure ( res, s )
     case rewriteResult of
       TcPluginRewriteTo
@@ -679,13 +681,14 @@ rewrite_args_slow binders inner_ki fvs roles tys = do
 
 noBogusCoercions :: RewriteM a -> RewriteM a
 noBogusCoercions thing_inside
-  = RewriteM \ rws env givens cache s ->
-    -- No new thunk is made if the flavour hasn't changed (note the bang).
-    let !env' = case fe_flavour env of
-          Derived -> env { fe_flavour = Wanted WDeriv }
-          _       -> env
+  = RewriteM \ env s ->
+    let !renv  = rewriteEnv env
+        !renv' = case fe_flavour renv of
+          Derived -> renv { fe_flavour = Wanted WDeriv }
+          _       -> renv
+        !env' = env { rewriteEnv = renv' }
     in
-    runRewriteM thing_inside rws env' givens cache s
+    runRewriteM thing_inside env' s
 
 chkAppend :: [a] -> [a] -> [a]
 chkAppend xs ys
@@ -701,7 +704,11 @@ instance Semigroup ReduceQ where
 instance Monoid ReduceQ where
   mempty = NoReduction
 
-data RewriteState = RewriteState [Ct] !ReduceQ
+data RewriteState =
+  RewriteState
+   { rewrittenCts      :: ![ Ct ]
+   , reductionOccurred :: !ReduceQ
+   }
 
 type RewrittenTyFamApps =
   UniqDFM
@@ -712,36 +719,37 @@ type RewrittenTyFamApps =
 #endif
     ( ListMap LooseTypeMap ( Maybe Reduction, [Ct] ) )
 
+data ShimRewriteEnv
+  = ShimRewriteEnv
+  { rewriters     :: !Rewriters
+  , rewriteEnv    :: !RewriteEnv
+  , rewriteCt     :: !Ct
+  , rewriteGivens :: ![ Ct ]
+  , rewriteCache  :: !( IORef RewrittenTyFamApps )
+  }
+
 newtype RewriteM a
   = RewriteM
   { runRewriteM
-    :: Rewriters
-    -> RewriteEnv
-    -> [Ct]
-    -> IORef RewrittenTyFamApps
+    :: ShimRewriteEnv
     -> RewriteState
     -> TcS ( a, RewriteState )
   }
   deriving ( Functor, Applicative, Monad )
-    via ( ReaderT Rewriters
-          ( ReaderT RewriteEnv
-            ( ReaderT [Ct]
-              ( ReaderT ( IORef RewrittenTyFamApps )
-                ( StateT RewriteState TcS )
-              )
-            )
-          )
+    via ( ReaderT ShimRewriteEnv
+          ( StateT RewriteState TcS )
         )
 
-runRewritePluginM :: Rewriters -> RewriteEnv -> [Ct] -> IORef RewrittenTyFamApps
+runRewritePluginM :: ShimRewriteEnv
                   -> RewriteM a
                   -> TcPluginM ( Maybe a, [Ct] )
-runRewritePluginM rws env givens rewriteCache ( RewriteM { runRewriteM = run } ) = do
+runRewritePluginM env ( RewriteM { runRewriteM = run } ) = do
+  
   evBindsVar <- getEvBindsTcPluginM 
   ( a, RewriteState newCts didReduce )
     <- unsafeTcPluginTcM
      $ runTcSWithEvBinds evBindsVar
-     $ run rws env givens rewriteCache ( RewriteState [] NoReduction )
+     $ run env ( RewriteState [] NoReduction )
   let
     mb_a = case didReduce of
       NoReduction -> Nothing
@@ -749,30 +757,31 @@ runRewritePluginM rws env givens rewriteCache ( RewriteM { runRewriteM = run } )
   pure ( mb_a, newCts )
 
 setDidReduce :: RewriteM ()
-setDidReduce = RewriteM \ _rws _env _givens _famApps ( RewriteState cts _ ) ->
+setDidReduce = RewriteM \ _env ( RewriteState cts _ ) ->
   pure ( (), RewriteState cts DidReduce )
 
 addRewriting :: TyCon -> [Type] -> Maybe Reduction -> [Ct] -> RewriteM ( Maybe Reduction )
-addRewriting tc tys mbRedn newCts = RewriteM \ _rws _env _givens cacheRef ( RewriteState cts s ) -> do
-  rewritings <- liftIOTcS $ readIORef cacheRef
+addRewriting tc tys mbRedn newCts = RewriteM \ env ( RewriteState cts s ) -> do
+  rewritings <- liftIOTcS $ readIORef ( rewriteCache env )
   let
+    s' :: ReduceQ
+    s'
+      | Just _ <- mbRedn
+      = DidReduce
+      | otherwise
+      = s
+    newRewritings :: RewrittenTyFamApps
+    newRewritings = insertFunEq rewritings tc tys ( mbRedn, newCts )
     mbEmittedWork :: Maybe ( Maybe Reduction, [Ct] )
     mbEmittedWork = findFunEq rewritings tc tys
   case mbEmittedWork of
-    -- We've already rewritten this, don't rewrite it again
+    -- We've already rewritten this.
+    -- Avoid emitting constraints for it again,
     -- to avoid sending the constraint solver in a loop.
-    Just _  -> pure ( Nothing, RewriteState cts s )
+    -- TODO: this is quite fragile.
+    Just _  -> pure ( mbRedn, RewriteState cts s' )
     Nothing -> do
-      let
-        s' :: ReduceQ
-        s' 
-          | Just _ <- mbRedn
-          = DidReduce
-          | otherwise
-          = s
-        newRewritings :: RewrittenTyFamApps
-        newRewritings = insertFunEq rewritings tc tys ( mbRedn, newCts )
-      liftIOTcS $ writeIORef cacheRef newRewritings
+      liftIOTcS $ writeIORef ( rewriteCache env ) newRewritings
       pure ( mbRedn , RewriteState ( cts <> newCts ) s' )
 
 -- Silly workaround because wrapTcS is not exported in GHC 9.0
@@ -780,17 +789,20 @@ liftIOTcS :: IO a -> TcS a
 liftIOTcS = runTcPluginTcS . tcPluginIO
 
 getRewriters :: RewriteM Rewriters
-getRewriters = RewriteM \ rws _env _givens _cache s -> pure ( rws, s )
+getRewriters = RewriteM \ env s -> pure ( rewriters env, s )
 
 getGivens :: RewriteM [Ct]
-getGivens = RewriteM \ _rws _env givens _cache s -> pure ( givens, s )
+getGivens = RewriteM \ env s -> pure ( rewriteGivens env, s )
 
 getRewriteCache :: RewriteM ( IORef RewrittenTyFamApps )
-getRewriteCache = RewriteM \ _rws _env _givens cache s -> pure ( cache, s )
+getRewriteCache = RewriteM \ env s -> pure ( rewriteCache env, s )
+
+getRewriteCt :: RewriteM Ct
+getRewriteCt = RewriteM \ env s -> pure ( rewriteCt env, s )
 
 getRewriteEnvField :: (RewriteEnv -> a) -> RewriteM a
-getRewriteEnvField accessor = RewriteM \ _rws env _givens _cache s ->
-  pure ( accessor env, s )
+getRewriteEnvField accessor = RewriteM \ env s ->
+  pure ( accessor ( rewriteEnv env ), s )
 
 getEqRel :: RewriteM EqRel
 getEqRel = getRewriteEnvField fe_eq_rel
@@ -808,14 +820,17 @@ getFlavourRole = do
   return (flavour, eq_rel)
 
 setEqRel :: EqRel -> RewriteM a -> RewriteM a
-setEqRel new_eq_rel thing_inside = RewriteM \ rws env givens cache s ->
-  if new_eq_rel == fe_eq_rel env
-  then runRewriteM thing_inside rws env givens cache s
-  else runRewriteM thing_inside rws (env { fe_eq_rel = new_eq_rel }) givens cache s
+setEqRel new_eq_rel thing_inside = RewriteM \ env s ->
+  if new_eq_rel == fe_eq_rel ( rewriteEnv env )
+  then runRewriteM thing_inside env s
+  else runRewriteM thing_inside ( setEqRel' env ) s
+    where
+      setEqRel' :: ShimRewriteEnv -> ShimRewriteEnv
+      setEqRel' env = env { rewriteEnv = ( rewriteEnv env ) { fe_eq_rel = new_eq_rel } }
 {-# INLINE setEqRel #-}
 
 liftTcS :: TcS a -> RewriteM a
-liftTcS thing_inside = RewriteM \ _rws _env _givens _cache s -> do
+liftTcS thing_inside = RewriteM \ _env s -> do
   a <- thing_inside
   pure ( a, s )
 
@@ -832,9 +847,11 @@ checkStackDepth ty = do
   liftTcS $ checkReductionDepth loc ty
 
 bumpDepth :: RewriteM a -> RewriteM a
-bumpDepth (RewriteM thing_inside) = RewriteM \ rws env givens cache s -> do
-  let !env' = env { fe_loc = bumpCtLocDepth (fe_loc env) }
-  thing_inside rws env' givens cache s
+bumpDepth (RewriteM thing_inside) = RewriteM \ env s -> do
+  let !renv  = rewriteEnv env
+      !renv' = renv { fe_loc = bumpCtLocDepth ( fe_loc renv ) }
+      !env'  = env { rewriteEnv = renv' }
+  thing_inside env' s
 
 #if !MIN_VERSION_ghc(9,2,0)
 --------------------------------------------------------------------------------
