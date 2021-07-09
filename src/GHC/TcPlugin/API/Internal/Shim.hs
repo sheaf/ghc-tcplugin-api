@@ -92,9 +92,7 @@ import GHC.Data.Maybe
 import GHC.Data.TrieMap
   ( ListMap )
 import GHC.Tc.Plugin
-  ( tcPluginIO
-  , newWanted, newDerived
-  )
+  ( tcPluginIO, newWanted, newDerived )
 import GHC.Tc.Solver.Monad
   ( TcS
   , zonkCo, zonkTcType
@@ -227,23 +225,23 @@ shimRewriter givens deriveds wanteds cacheRef rws solver
   = solver givens deriveds wanteds
   | otherwise
   = do
-    ( solvedDeriveds, newCts1, deriveds') <- traverseCts ( reduceCt cacheRef rws givens ) deriveds
-    ( solvedWanteds , newCts2, wanteds' ) <- traverseCts ( reduceCt cacheRef rws givens ) wanteds
-    res <- solver givens deriveds' wanteds'
+    res <- solver givens deriveds wanteds
     case res of
-      contra@( TcPluginContradiction {} )
-        -> pure contra
-      TcPluginOk solved new
-        -> pure $
-              TcPluginOk
-                ( solvedDeriveds ++ solvedWanteds ++ solved )
-                ( newCts1 ++ newCts2 ++ new )
+      contra@( TcPluginContradiction {} ) ->
+        pure contra
+      TcPluginOk solved new -> do
+        ( rewrittenDeriveds, solvedDeriveds, newCts1 ) <- traverseCts ( reduceCt cacheRef rws givens ) deriveds
+        ( rewrittenWanteds , solvedWanteds , newCts2 ) <- traverseCts ( reduceCt cacheRef rws givens ) wanteds
+        pure $
+            TcPluginOk
+              ( solved ++ solvedDeriveds ++ solvedWanteds )
+              ( new ++ newCts1 ++ rewrittenDeriveds ++ newCts2 ++ rewrittenWanteds )
 
 reduceCt :: IORef RewrittenTyFamApps
          -> Rewriters
          -> [Ct]
          -> Ct
-         -> TcPluginM ( Maybe (EvTerm, Ct), [Ct], Ct )
+         -> TcPluginM ( Maybe ( Ct, (EvTerm, Ct) ), [Ct] )
 reduceCt cacheRef rws givens ct = do
   let
     predTy :: Type
@@ -254,23 +252,30 @@ reduceCt cacheRef rws givens ct = do
     shimRewriteEnv = ShimRewriteEnv rws rwEnv ct givens cacheRef
   ( res, newCts ) <- runRewritePluginM shimRewriteEnv ( rewrite_one predTy )
   case res of
-    Nothing -> pure ( Nothing, newCts, ct )
+    Nothing -> pure ( Nothing, newCts )
     Just ( Reduction predTy' co ) -> do
       ctEv' <- case ctFlavour ct of
         Given     -> error "ghc-tcplugin-api: unexpected Given in reduceCt"
         Wanted {} -> newWanted  ( ctLoc ct ) predTy'
         Derived   -> newDerived ( ctLoc ct ) predTy'
-      pure ( Just ( evCast ( ctEvExpr ctEv' ) co, ct ), newCts, mkNonCanonical ctEv' )
+      pure ( Just
+              ( mkNonCanonical ctEv'
+              , ( evCast ( ctEvExpr ctEv' ) co, ct )
+              )
+           , newCts
+           )
 
 traverseCts :: Monad m
-            => ( a -> m ( Maybe b, [c], d ) )
+            => ( a -> m ( Maybe (b, c), [d] ) )
             -> [a]
             -> m ( [b], [c], [d] )
 traverseCts _ [] = pure ( [], [], [] )
 traverseCts f (a : as) = do
-  ( mb_b, cs, d ) <- f a
-  ( bs, css, ds ) <- traverseCts f as
-  pure ( maybe bs ( : bs ) mb_b, cs ++ css, d : ds )
+  ( mb_bc, ds ) <- f a
+  ( bs, cs, dss ) <- traverseCts f as
+  case mb_bc of
+    Nothing    -> pure ( bs, cs, ds ++ dss )
+    Just (b,c) -> pure ( b : bs, c : cs, ds ++ dss )
 
 --------------------------------------------------------------------------------
 -- The following is (mostly) copied from GHC 9.4's GHC.Tc.Solver.Rewrite module.
