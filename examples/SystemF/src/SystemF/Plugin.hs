@@ -1,13 +1,19 @@
-{-# LANGUAGE BlockArguments  #-}
-{-# LANGUAGE DataKinds       #-}
-{-# LANGUAGE GADTs           #-}
-{-# LANGUAGE NamedFieldPuns  #-}
-{-# LANGUAGE MultiWayIf      #-}
-{-# LANGUAGE PolyKinds       #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TypeOperators   #-}
+{-# LANGUAGE BlockArguments      #-}
+{-# LANGUAGE DataKinds           #-}
+{-# LANGUAGE GADTs               #-}
+{-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE MultiWayIf          #-}
+{-# LANGUAGE NamedFieldPuns      #-}
+{-# LANGUAGE PolyKinds           #-}
+{-# LANGUAGE RecordWildCards     #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TypeOperators       #-}
 
 module SystemF.Plugin ( plugin ) where
+
+-- base
+import Data.Maybe
+  ( isJust )
 
 -- ghc
 import qualified GHC.Plugins as GHC
@@ -162,7 +168,7 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
             [ kϕ, kψ, k
             , mkTyConApp extendTyCon
               [ kϕ2, kψ, l
-              , if isId defs s
+              , if isId defs givens s
                 then t
                 else mkTyConApp composeTyCon [ kϕ2, kψ2, kψ, t , s ]
               , mkTyConApp applySubTyCon [ kψ1, kξ1, l, t , a ]
@@ -179,7 +185,7 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
       , Just ( tc3, _ ) <- splitTyConApp_maybe bind
       , tc3 == bindTyCon
       = pure . Just $
-          if isId defs s
+          if isId defs givens s
           then sub_arg
           else mkTyConApp applySubTyCon [kϕ, kψ, k, s, sub_arg]
       -- (ShiftLift1) ApplySub ( KUnder s :*: KBind ) a
@@ -278,7 +284,7 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
             [ kϕ, kψ, k
             , mkTyConApp extendTyCon
                 [ kϕ0, kψ1, l
-                , if isId defs t
+                , if isId defs givens t
                   then s
                   else mkTyConApp composeTyCon [kϕ0, kψ0, kψ1, t, s]
                 , a
@@ -289,31 +295,54 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
       = pure Nothing
 
 detectApplySub :: PluginDefs -> [ Ct ] -> Type -> Maybe ( Type, Type, Type, Type, Type )
-detectApplySub ( PluginDefs { applySubTyCon } ) givens ty
-  | Just ( tc, [ kϕ, kψ, k, s, a ] ) <- splitTyConApp_maybe ty
-  , tc == applySubTyCon
-  = Just ( kϕ, kψ, k, s, a )
+detectApplySub ( PluginDefs { applySubTyCon } ) =
+  recognise \ ty ->
+    case splitTyConApp_maybe ty of
+      Just ( tc, [ kϕ, kψ, k, s, a ] )
+        | tc == applySubTyCon
+        -> Just ( kϕ, kψ, k, s, a )
+      _ -> Nothing
+
+recognise :: forall r. ( Type -> Maybe r ) -> [ Ct ] -> Type -> Maybe r
+recognise f givens ty
+  | Just r <- f ty
+  = Just r
   | otherwise
-  = go givens
+  = go [ ty ] givens
+  where
+    go :: [ Type ] -> [ Ct ] -> Maybe r
+    go _   [] = Nothing
+    go tys ( g : gs )
+      | EqPred NomEq lhs rhs <- classifyPredType ( ctPred g )
+      = if
+          | any ( eqType lhs ) tys
+          -> case f rhs of
+              Just r  -> Just r
+              Nothing ->
+                if any ( eqType rhs ) tys
+                then go tys gs
+                else go ( rhs : tys ) givens
+          | any ( eqType rhs ) tys
+          -> case f lhs of
+              Just r  -> Just r
+              Nothing ->
+                if any ( eqType lhs ) tys
+                then go tys gs
+                else go ( lhs : tys ) givens
+          | otherwise
+          -> go tys gs
+      | otherwise
+      = go tys gs
 
-    where
-      go :: [ Ct ] -> Maybe ( Type, Type, Type, Type, Type )
-      go [] = Nothing
-      go ( g : gs )
-        | EqPred NomEq lhs rhs <- classifyPredType ( ctPred g )
-        , Just ( tc, [ kϕ, kψ, k, s, a ] ) <- splitTyConApp_maybe lhs
-        , tc == applySubTyCon
-        , rhs `eqType` ty
-        = Just ( kϕ, kψ, k, s, a )
-        | otherwise
-        = go gs
-
-isId :: PluginDefs -> Type -> Bool
-isId ( PluginDefs { .. } ) s = case splitTyConApp_maybe s of
-  Just ( tc, _ )
-    | tc == idTyCon
-    -> True
-  _ -> False                           
+isId :: PluginDefs -> [ Ct ] -> Type -> Bool
+isId ( PluginDefs { .. } ) givens s = isJust $ recognise isIdTyCon givens s
+  where
+    isIdTyCon :: Type -> Maybe ()
+    isIdTyCon ty = case splitTyConApp_maybe ty of
+      Just ( tc, _ )
+        | tc == idTyCon
+        -> Just ()
+      _ -> Nothing
 
 cancelIdentities :: PluginDefs -> Type -> ( Maybe Type, Bool )
 cancelIdentities ( PluginDefs { .. } ) = go False
