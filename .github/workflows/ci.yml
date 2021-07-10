@@ -34,3 +34,7 @@ jobs:
 
     - name: Build ghc-tcplugin-api
       run: cabal build ghc-tcplugin-api
+
+    - name: Build and lint System F example
+      working-directory: ./examples/SystemF
+      run: cabal build system-f

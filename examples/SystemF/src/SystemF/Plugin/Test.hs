@@ -6,8 +6,6 @@
 {-# LANGUAGE TypeOperators    #-}
 
 {-# OPTIONS_GHC -fplugin=SystemF.Plugin #-}
-{-# OPTIONS_GHC -dcore-lint #-}
---{-# OPTIONS_GHC -ddump-tc-trace -ddump-to-file -dsuppress-uniques #-}
 
 module SystemF.Plugin.Test where
 
