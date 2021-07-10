@@ -4,6 +4,7 @@
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE MultiWayIf          #-}
 {-# LANGUAGE NamedFieldPuns      #-}
+{-# LANGUAGE PatternSynonyms     #-}
 {-# LANGUAGE PolyKinds           #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -12,14 +13,22 @@
 module SystemF.Plugin ( plugin ) where
 
 -- base
+import Data.Functor
+  ( ($>) )
 import Data.Maybe
   ( isJust )
+
+-- transformers
+import Control.Monad.Trans.State.Strict
+  ( StateT, runStateT, get, put )
+import Control.Monad.Trans.Class
+  ( lift )
 
 -- ghc
 import qualified GHC.Plugins as GHC
   ( Plugin(..), defaultPlugin, purePlugin )
 import GHC.Utils.Outputable
-  ( ($$) )
+  ( empty, ($$) )
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API
@@ -81,6 +90,34 @@ pluginStop _ = pure ()
 --------------------------------------------------------------------------------
 -- Simplification of type family applications.
 
+type RewriteQ = Bool
+pattern NoReduction :: RewriteQ
+pattern NoReduction = False
+pattern DidRewrite :: RewriteQ
+pattern DidRewrite = True
+
+type RewriteM = StateT RewriteQ ( TcPluginM Rewrite )
+
+runRewriteM :: RewriteM a -> TcPluginM Rewrite ( Maybe a )
+runRewriteM ma = do
+  ( a, didRewrite ) <- runStateT ma NoReduction
+  pure $
+    if didRewrite
+    then Just a
+    else Nothing
+
+rewrote :: RewriteM ()
+rewrote = put DidRewrite
+
+askIfRewrote :: RewriteM a -> RewriteM ( a, RewriteQ )
+askIfRewrote ma = do
+  before <- get
+  put NoReduction
+  a <- ma
+  didRewrite <- get
+  put ( before || didRewrite )
+  pure ( a, didRewrite )
+
 pluginRewrite :: PluginDefs -> UniqFM TyCon TcPluginRewriter
 pluginRewrite defs@( PluginDefs { applySubTyCon } ) =
   listToUFM
@@ -92,7 +129,7 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
   = do
     tcPluginTrace "SystemF.Plugin rewrite {"
       ( ppr subst $$ ppr subst_arg )
-    res <- rewritePlainSub kϕ kψ k subst subst_arg
+    res <- runRewriteM $ rewriteApplySub kϕ kψ k subst subst_arg
     tcPluginTrace "SystemF.Plugin rewrite }" ( ppr res )
     pure ( finish res )
   | otherwise
@@ -100,114 +137,101 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
   where
 
     finish :: Maybe Type -> TcPluginRewriteResult
-    finish Nothing      = TcPluginNoRewrite []
-    finish ( Just res ) =
+    finish ( Just ty ) =
       TcPluginRewriteTo
-        ( mkTyFamAppReduction "SystemF.Plugin" Nominal applySubTyCon applySubArgs res )
+        ( mkTyFamAppReduction "SystemF.Plugin" Nominal applySubTyCon applySubArgs ty )
         []
+    finish _ = TcPluginNoRewrite []
 
-    rewritePlainSub :: Type -> Type -> Type -> Type -> Type -> TcPluginM Rewrite ( Maybe Type )
-    rewritePlainSub kϕ kψ k sub sub_arg =
-      case cancelIdentities defs sub of
-        ( Nothing, _ )
-          -> pure ( Just sub_arg )
-        ( Just sub', cancelOccurred )
-          -> do
-              mb_rewrite <- rewriteCancelledSub kϕ kψ k sub' sub_arg
-              case mb_rewrite of
-                Just rewrite
-                  -> pure ( Just rewrite )
-                Nothing
-                  | cancelOccurred
-                  -> pure ( Just $ mkTyConApp applySubTyCon [ kϕ, kψ, k, sub', sub_arg ] )
-                  | otherwise
-                  -> pure Nothing
 
-    rewriteCancelledSub :: Type -> Type -> Type -> Type -> Type -> TcPluginM Rewrite ( Maybe Type )
-    rewriteCancelledSub kϕ kψ k sub sub_arg
+    rewriteApplySub :: Type -> Type -> Type -> Type -> Type -> RewriteM Type
+    rewriteApplySub kϕ kψ k sub sub_arg
       -- (Clos) ApplySub t ( ApplySub s a )
       --   ===> ApplySub ( t :*: s ) a
       -- NB. might need to use Givens to find that the argument is 'ApplySub s a'.
-      | Just ( kϕ0, _kϕ, _k, s, a ) <- detectApplySub defs givens sub_arg
-      = let
-          totalSub :: Type
-          totalSub = case fst $ cancelIdentities defs s of
-            Nothing -> sub
-            Just s' ->
-              mkTyConApp composeTyCon
-                [ kϕ0, kϕ, kψ, sub, s' ]
-        in pure . Just $
-            mkTyConApp applySubTyCon [ kϕ0, kψ, k, totalSub, a ]
-      -- (AssEnv) ApplySub ( t :*: ( s :*: r ) ) a
-      --     ===> ApplySub ( ( t :*: s ) :*: r ) a
+      | Just ( kϕ0, _kϕ, l, s, a ) <- detectApplySub defs givens sub_arg
+      , let
+          sub' :: Type
+          sub' = mkTyConApp composeTyCon [ kϕ0, kϕ, kψ, sub, s ]
+      = do
+        rewrote
+        rewriteApplySub kϕ0 kψ l sub' a
+      | otherwise
+      = do
+        sub' <- canonicaliseSub defs givens kϕ kψ k sub
+        if isId defs givens sub'
+        then rewrote $> sub_arg
+        else pure $ mkTyConApp applySubTyCon [ kϕ, kψ, k, sub', sub_arg ]
+
+canonicaliseSub :: PluginDefs -> [ Ct ]
+                -> Type -> Type -> Type -> Type
+                -> RewriteM Type
+canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
+
+  where
+    go :: Type -> RewriteM Type
+    go sub
+      -- (AssEnv) t :*: ( s :*: r )
+      --     ===> ( t :*: s ) :*: r
       | Just ( tc1, [ kϕ1, kψ1, kξ1, t, sr ] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [ _  , kψ2, _  , s,  r ] ) <- splitTyConApp_maybe sr
       , tc2 == composeTyCon
       = do
-        tcPluginTrace "SystemF.Plugin (AssEnv)" ( ppr sub $$ ppr sub_arg )
-        pure . Just $
-          mkTyConApp applySubTyCon
-            [ kϕ, kψ, k
-            , mkTyConApp composeTyCon
-                [ kϕ1, kψ2, kξ1
-                , mkTyConApp composeTyCon [ kψ2, kψ1, kξ1, t, s ]
-                , r
-                ]
-            , sub_arg
+        lift $ tcPluginTrace "AssEnv" ( ppr t $$ ppr s $$ ppr r )
+        rewrote
+        go $
+          mkTyConApp composeTyCon
+            [ kϕ1, kψ2, kξ1
+            , mkTyConApp composeTyCon [ kψ2, kψ1, kξ1, t, s ]
+            , r
             ]
-      -- (MapEnv) ApplySub ( t :*: KExtend s a ) b
-      --     ===> ApplySub ( KExtend ( t :*: s ) ( ApplySub t a ) ) b
-      -- NB: 's' could reduce to 'KId' here.
+      -- (MapEnv) t :*: KExtend s a 
+      --     ===> KExtend ( t :*: s ) ( ApplySub t a )
       | Just ( tc1, [ _  , kψ1, kξ1, t, ext ] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [ kϕ2, kψ2,   l, s,   a ] ) <- splitTyConApp_maybe ext
       , tc2 == extendTyCon
-      = pure . Just $
-          mkTyConApp applySubTyCon
-            [ kϕ, kψ, k
-            , mkTyConApp extendTyCon
-              [ kϕ2, kψ, l
-              , if isId defs givens s
-                then t
-                else mkTyConApp composeTyCon [ kϕ2, kψ2, kψ, t , s ]
-              , mkTyConApp applySubTyCon [ kψ1, kξ1, l, t , a ]
-              ]
-            , sub_arg 
+      = do
+        lift $ tcPluginTrace "MapEnv" ( ppr t $$ ppr s ) 
+        rewrote
+        go $
+          mkTyConApp extendTyCon
+            [ kϕ2, kψ, l
+            , mkTyConApp composeTyCon [ kϕ2, kψ2, kψ, t , s ]
+            , mkTyConApp applySubTyCon [ kψ1, kξ1, l, t , a ]
             ]
-      -- (ShiftCons) ApplySub ( KExtend s a :*: KBind ) b
-      --        ===> ApplySub s b
-      -- NB: 's' could reduce to 'KId' here.
+      -- (ShiftCons) KExtend s a :*: KBind
+      --        ===> s
       | Just ( tc1, [_kϕ, _kψ0, _kψ, ext, bind] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [_kϕ0, _kψ0, _l, s,_a] ) <- splitTyConApp_maybe ext
       , tc2 == extendTyCon
       , Just ( tc3, _ ) <- splitTyConApp_maybe bind
       , tc3 == bindTyCon
-      = pure . Just $
-          if isId defs givens s
-          then sub_arg
-          else mkTyConApp applySubTyCon [kϕ, kψ, k, s, sub_arg]
-      -- (ShiftLift1) ApplySub ( KUnder s :*: KBind ) a
-      --         ===> ApplySub ( KBind :*: s ) a
+      = do
+        lift $ tcPluginTrace "ShiftCons" ( ppr s )
+        rewrote
+        go s
+      -- (ShiftLift1) KUnder s :*: KBind
+      --         ===> KBind :*: s
       | Just ( tc1, [ _, _, _, under, bind ] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [ _, l ] ) <- splitTyConApp_maybe bind
       , tc2 == bindTyCon
       , Just ( tc3, [ _, kψ0, _, s ] ) <- splitTyConApp_maybe under
       , tc3 == underTyCon
-      = pure . Just $
-          mkTyConApp applySubTyCon
-            [ kϕ, kψ, k
-            , mkTyConApp composeTyCon
-              [ kϕ, kψ0, kψ
-              , mkTyConApp bindTyCon [ kψ0, l ]
-              , s
-              ]
-            , sub_arg
+      = do
+        lift $ tcPluginTrace "ShiftLift1" ( ppr s )
+        rewrote
+        go $
+          mkTyConApp composeTyCon
+            [ kϕ, kψ0, kψ
+            , mkTyConApp bindTyCon [ kψ0, l ]
+            , s
             ]
-      -- (ShiftLift2) ApplySub ( ( t :*: KUnder s ) :*: KBind ) a
-      --         ===> ApplySub ( ( t :*: KBind ) :*: s ) a
+      -- (ShiftLift2) ( t :*: KUnder s ) :*: KBind
+      --         ===> ( t :*: KBind ) :*: s
       | Just ( tc1, [ _, _, _, t_under, bind ] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [ _, l ] ) <- splitTyConApp_maybe bind
@@ -216,39 +240,37 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
       , tc3 == composeTyCon
       , Just ( tc4, [ _, kψ1, _, s ] ) <- splitTyConApp_maybe under
       , tc4 == underTyCon
-      = pure . Just $
-          mkTyConApp applySubTyCon
-            [ kϕ, kψ, k
+      = do
+        lift $ tcPluginTrace "ShiftLift2" ( ppr t $$ ppr s )
+        rewrote
+        go $
+          mkTyConApp composeTyCon
+            [ kϕ, kψ1, kψ
             , mkTyConApp composeTyCon
-               [ kϕ, kψ1, kψ
-               , mkTyConApp composeTyCon
-                  [ kψ1, kψ0, kψ
-                  , t
-                  , mkTyConApp bindTyCon [ kψ1, l ]
-                  ]
-               , s
+               [ kψ1, kψ0, kψ
+               , t
+               , mkTyConApp bindTyCon [ kψ1, l ]
                ]
-            , sub_arg
+            , s
             ]
-      -- (Lift1) ApplySub ( KUnder t :*: KUnder s ) a
-      --    ===> ApplySub ( KUnder ( t :*: s ) ) a
+      -- (Lift1) KUnder t :*: KUnder s
+      --    ===> KUnder ( t :*: s )
       | Just ( tc1, [ _, _, _, under_t, under_s ] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [kϕ1, kψ1, l, t] ) <- splitTyConApp_maybe under_t
       , tc2 == underTyCon
       , Just ( tc3, [kϕ2, _kϕ1, _l, s] ) <- splitTyConApp_maybe under_s
       , tc3 == underTyCon
-      = pure . Just $
-          mkTyConApp applySubTyCon
-            [ kϕ, kψ, k
-            , mkTyConApp underTyCon
-              [ kϕ2, kψ1, l
-              , mkTyConApp composeTyCon [kϕ2, kϕ1, kψ1, t, s]
-              ]
-            , sub_arg
-            ]
-      -- (Lift2) ApplySub ( ( u :*: KUnder t ) :*: KUnder s ) a
-      --    ===> ApplySub ( u :*: KUnder ( t :*: s ) ) a
+      = do
+        lift $ tcPluginTrace "Lift1" ( ppr t $$ ppr s )
+        rewrote
+        go $
+          mkTyConApp underTyCon
+          [ kϕ2, kψ1, l
+          , mkTyConApp composeTyCon [kϕ2, kϕ1, kψ1, t, s]
+          ]          
+      -- (Lift2) ( u :*: KUnder t ) :*: KUnder s
+      --    ===> u :*: KUnder ( t :*: s )
       | Just ( tc1, [ _, _, _, u_under_t, under_s ] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [ _, kψ0, _, u, under_t ] ) <- splitTyConApp_maybe u_under_t
@@ -257,42 +279,103 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
       , tc3 == underTyCon
       , Just ( tc4, [ kϕ0, kψ1, l, s ] ) <- splitTyConApp_maybe under_s
       , tc4 == underTyCon
-      = pure . Just $
-          mkTyConApp applySubTyCon
-            [ kϕ, kψ, k
-            , mkTyConApp composeTyCon
-              [ kϕ, kψ0, kψ
-              , u
-              , mkTyConApp underTyCon
-                  [ kϕ0, kψ2, l
-                  , mkTyConApp composeTyCon [ kϕ0, kψ1, kψ2, t , s ]
-                  ]
-              ]
-            , sub_arg 
+      = do
+        lift $ tcPluginTrace "Lift2" ( ppr u $$ ppr t $$ ppr s )
+        rewrote
+        go $
+          mkTyConApp composeTyCon
+            [ kϕ, kψ0, kψ
+            , u
+            , mkTyConApp underTyCon
+                [ kϕ0, kψ2, l
+                , mkTyConApp composeTyCon [ kϕ0, kψ1, kψ2, t , s ]
+                ]
             ]
-      -- (LiftEnv) ApplySub ( KExtend t a :*: KUnder s ) b
-      --      ===> ApplySub ( KExtend ( t :*: s ) a ) b
-      -- NB: 't' could reduce to 'KId' here.
+      -- (LiftEnv) KExtend t a :*: KUnder s
+      --      ===> KExtend ( t :*: s ) a
       | Just ( tc1, [ _kϕ, _, _kψ, extend_t_a, under_s ] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [_, kψ1, l, t,a] ) <- splitTyConApp_maybe extend_t_a
       , tc2 == extendTyCon
       , Just ( tc3, [kϕ0, kψ0, _, s] ) <- splitTyConApp_maybe under_s
       , tc3 == underTyCon
-      = pure . Just $
-          mkTyConApp applySubTyCon
-            [ kϕ, kψ, k
-            , mkTyConApp extendTyCon
-                [ kϕ0, kψ1, l
-                , if isId defs givens t
-                  then s
-                  else mkTyConApp composeTyCon [kϕ0, kψ0, kψ1, t, s]
-                , a
-                ]
-            , sub_arg
+      = do
+        lift $ tcPluginTrace "LiftEnv" ( ppr t $$ ppr s )
+        rewrote
+        go $
+          mkTyConApp extendTyCon
+            [ kϕ0, kψ1, l
+            , if isId defs givens t
+              then s
+              else mkTyConApp composeTyCon [kϕ0, kψ0, kψ1, t, s]
+            , a
             ]
+      -- (IdL) KId :*: s
+      --  ===> s
+      | Just ( tc1, [ _, _ , _, i, s ] ) <- splitTyConApp_maybe sub
+      , tc1 == composeTyCon
+      , Just ( tc2, _ ) <- splitTyConApp_maybe i
+      , tc2 == idTyCon
+      = do
+        lift $ tcPluginTrace "IdL" ( ppr s )
+        rewrote
+        go s
+      -- (IdR) s :*: KId
+      --  ===> s
+      | Just ( tc1, [ _, _, _, s, i ] ) <- splitTyConApp_maybe sub
+      , tc1 == composeTyCon
+      , Just ( tc2, _ ) <- splitTyConApp_maybe i
+      , tc2 == idTyCon
+      = do
+        lift $ tcPluginTrace "IdR" ( ppr s )
+        rewrote
+        go s
+      -- (LiftId) KUnder KId
+      --     ===> KId
+      | Just ( tc1, [ _, _, _, i ] ) <- splitTyConApp_maybe sub
+      , tc1 == underTyCon
+      , Just ( tc2, _ ) <- splitTyConApp_maybe i
+      , tc2 == idTyCon
+      = do
+        lift $ tcPluginTrace "LiftId" empty
+        rewrote
+        pure $ i
+      -- Recur under KUnder.
+      | Just ( tc1, [ kϕ0, kψ0, k0, s ] ) <- splitTyConApp_maybe sub
+      , tc1 == underTyCon
+      = do
+        lift $ tcPluginTrace "Recur: KUnder" ( ppr s )
+        ( s', didRewrite ) <- askIfRewrote $ canonicaliseSub defs givens kϕ0 kψ0 k0 s
+        let
+          next :: Type -> RewriteM Type
+          next = if didRewrite then go else pure
+        next $
+          mkTyConApp underTyCon [ kϕ0, kψ0, k0, s' ]
+      -- Recur under KExtend.
+      | Just ( tc1, [ kϕ0, kψ0, k0, s, a ] ) <- splitTyConApp_maybe sub
+      , tc1 == extendTyCon
+      = do
+        lift $ tcPluginTrace "Recur: KExtend" ( ppr s )
+        ( s', didRewrite ) <- askIfRewrote $ canonicaliseSub defs givens kϕ0 kψ0 k0 s
+        let
+          next :: Type -> RewriteM Type
+          next = if didRewrite then go else pure
+        next $
+          mkTyConApp extendTyCon [ kϕ0, kψ0, k0, s', a ]
+      -- Recur under composition.
+      | Just ( tc1, [ kϕ0, kψ0, kξ0, s, t ] ) <- splitTyConApp_maybe sub
+      , tc1 == composeTyCon
+      = do
+        lift $ tcPluginTrace "Recur: (:*:)" ( ppr s $$ ppr t )
+        ( s', didRewrite1 ) <- askIfRewrote $ canonicaliseSub defs givens kψ0 kξ0 k s
+        ( t', didRewrite2 ) <- askIfRewrote $ canonicaliseSub defs givens kϕ0 kψ0 k t
+        let
+          next :: Type -> RewriteM Type
+          next = if didRewrite1 || didRewrite2 then go else pure
+        next $
+          mkTyConApp composeTyCon [ kϕ0, kψ0, kξ0, s', t' ]
       | otherwise
-      = pure Nothing
+      = pure sub
 
 detectApplySub :: PluginDefs -> [ Ct ] -> Type -> Maybe ( Type, Type, Type, Type, Type )
 detectApplySub ( PluginDefs { applySubTyCon } ) =
@@ -343,43 +426,3 @@ isId ( PluginDefs { .. } ) givens s = isJust $ recognise isIdTyCon givens s
         | tc == idTyCon
         -> Just ()
       _ -> Nothing
-
-cancelIdentities :: PluginDefs -> Type -> ( Maybe Type, Bool )
-cancelIdentities ( PluginDefs { .. } ) = go False
-  where
-    go :: Bool -> Type -> ( Maybe Type, Bool )
-    go cancel sub = case splitTyConApp_maybe sub of
-      Just ( tc, args )
-        | tc == idTyCon
-        -> ( Nothing, cancel )
-        | tc == underTyCon
-        , [kϕ, kψ, k, a] <- args
-        -> case go cancel a of
-            ( Nothing, _ )
-              -> ( Nothing, True )
-            ( Just a', cancel' )
-              -> ( Just $ mkTyConApp underTyCon [kϕ, kψ, k, a'], cancel' )
-        | tc == extendTyCon
-        , [kϕ, kψ, k, t, a] <- args
-        ->
-          let
-            t' :: Type
-            cancel' :: Bool
-            ( t', cancel' ) = case go cancel t of
-              ( Nothing , c' ) -> ( mkTyConApp idTyCon [ kϕ ], c' )
-              ( Just res, c' ) -> ( res, c' )
-          in 
-            ( Just $ mkTyConApp extendTyCon [ kϕ, kψ, k, t', a ]
-            , cancel'
-            )
-        | tc == composeTyCon
-        , [kϕ, kψ, kξ, s, t] <- args
-        -> case ( go cancel s, go cancel t) of
-          ( ( Nothing, _  ), ( Nothing, _  ) ) -> ( Nothing, True )
-          ( ( Just s', _  ), ( Nothing, _  ) ) -> ( Just s', True )
-          ( ( Nothing, _  ), ( Just t', _  ) ) -> ( Just t', True )
-          ( ( Just s', c1 ), ( Just t', c2 ) ) ->
-            ( Just $ mkTyConApp composeTyCon [kϕ, kψ, kξ, s', t']
-            , c1 || c2
-            )
-      _ -> ( Just sub, cancel )

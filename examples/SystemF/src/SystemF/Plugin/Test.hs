@@ -7,6 +7,7 @@
 
 {-# OPTIONS_GHC -fplugin=SystemF.Plugin #-}
 {-# OPTIONS_GHC -dcore-lint #-}
+--{-# OPTIONS_GHC -ddump-tc-trace -ddump-to-file -dsuppress-uniques #-}
 
 module SystemF.Plugin.Test where
 
@@ -65,7 +66,16 @@ liftEnv :: Proxy t -> Proxy a -> Proxy s -> Proxy b
         -> Proxy ( ApplySub ( KExtend ( t :*: s ) a ) b )
 liftEnv _ _ _ _ x = x
 
+--------------------------------------------------------------------------------
+
 ids :: Proxy s1 -> Proxy s2 -> Proxy s3 -> Proxy b
     -> Proxy ( ApplySub ( s1 :*: KUnder ( s2 :*: KUnder ( KId :*: KUnder KId ) ) :*: s3 ) b )
     -> Proxy ( ApplySub ( s1 :*: KUnder s2 :*: s3 ) b )
 ids _ _ _ _ x = x
+
+reassoc :: Proxy s1 -> Proxy s2 -> Proxy s3
+        -> Proxy s4 -> Proxy s5 -> Proxy s6
+        -> Proxy a
+        -> Proxy ( ApplySub ( s1 :*: ( ( s2 :*: s3 ) :*: ( s4 :*: ( s5 :*: s6 ) ) ) ) a )
+        -> Proxy ( ApplySub ( s1 :*: s2 :*: s3 :*: s4 :*: s5 :*: s6 ) a )
+reassoc _ _ _ _ _ _ _ x = x
