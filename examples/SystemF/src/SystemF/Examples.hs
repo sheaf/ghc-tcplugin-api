@@ -3,6 +3,7 @@
 {-# LANGUAGE DataKinds                #-}
 {-# LANGUAGE GADTs                    #-}
 {-# LANGUAGE PolyKinds                #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE TypeApplications         #-}
 {-# LANGUAGE TypeOperators            #-}
@@ -45,10 +46,10 @@ square = LamE ( SLitTy @Int ) $ PrimE ( Mul ( VarE Z ) ( VarE Z ) )
 type ChurchKind :: Kind -> Kind
 type ChurchKind k = Fun (Fun k k) (Fun k k)
 
-type ChurchType :: Kind -> Type KEmpty (ChurchKind k)
-type ChurchType k = Forall ( (VarTy KZ :-> VarTy KZ) :-> (VarTy KZ :-> VarTy KZ) )
+type ChurchType :: forall (k :: Kind). Type KEmpty (ChurchKind k)
+type ChurchType = Forall ( (VarTy KZ :-> VarTy KZ) :-> (VarTy KZ :-> VarTy KZ) )
 
-church :: Hs.Int -> Term Empty (ChurchType k)
+church :: forall (k :: Kind). Hs.Int -> Term Empty (ChurchType @k)
 church i = TyLam $ LamE ( SVarTy SKZ :%-> SVarTy SKZ ) $ LamE ( SVarTy SKZ ) ( go i )
   where
     go :: Hs.Int -> Term ( Empty :*& k :& (VarTy KZ :-> VarTy KZ) :& VarTy KZ ) ( VarTy KZ )
