@@ -182,17 +182,18 @@ type TcPluginRewriter
 -- operation of a type-checking plugin, as defined in this API.
 --
 -- __Note__: this is not the same record as GHC's built-in
--- 'GHC.Tc.Types.TcPlugin' record.
+-- 'GHC.Tc.Types.TcPlugin' record. Use 'mkTcPlugin' for the conversion.
 -- 
--- To create a type-checking plugin, use this record type, and then call
--- 'mkTcPlugin' on the result. This will return something that can be passed
--- to 'GHC.Plugins.Plugin':
+-- To create a type-checking plugin, define something of this type
+-- and then call 'mkTcPlugin' on the result.
+-- This will return something that can be passed to 'GHC.Plugins.Plugin':
 --
 -- > plugin :: GHC.Plugins.Plugin
 -- > plugin =
 -- >   GHC.Plugins.defaultPlugin
--- >     { GHC.Plugins.tcPlugin = \ args -> Just $
--- >        GHC.TcPlugin.API.mkTcPlugin ( myTcPlugin args )
+-- >     { GHC.Plugins.tcPlugin =
+-- >         \ args -> Just $
+-- >            GHC.TcPlugin.API.mkTcPlugin ( myTcPlugin args )
 -- >     }
 -- >
 -- > myTcPlugin :: [String] -> GHC.TcPlugin.API.TcPlugin
@@ -213,7 +214,7 @@ data TcPlugin = forall s. TcPlugin
       -- or specify that it has solved some constraints (with evidence),
       -- and possibly emit additional wanted constraints.
       --
-      -- Use @ \\ _ _ _ _ -> pure $ TcPluginOK [] [] @ if your plugin
+      -- Use @ \\ _ _ _ -> pure $ TcPluginOK [] [] @ if your plugin
       -- does not provide this functionality.
 
   , tcPluginRewrite :: s -> GHC.UniqFM GHC.TyCon TcPluginRewriter
@@ -388,7 +389,9 @@ unsafeLiftThroughTcM :: MonadTcPlugin m => ( GHC.TcM a -> GHC.TcM b ) -> m a -> 
 unsafeLiftThroughTcM f ma = unsafeWithRunInTcM \ runInTcM -> f ( runInTcM ma )
 
 -- | Use this function to create a type-checker plugin to pass to GHC.
-mkTcPlugin :: TcPlugin -> GHC.TcPlugin
+mkTcPlugin
+  :: TcPlugin     -- ^ type-checking plugin written with this library
+  -> GHC.TcPlugin -- ^ type-checking plugin for GHC
 mkTcPlugin ( TcPlugin
               { tcPluginInit = tcPluginInit :: TcPluginM Init userDefs
               , tcPluginSolve
@@ -475,11 +478,13 @@ mkTcPlugin ( TcPlugin
 -- and 'tcPluginRewrite' use; it is not possible to emit work or
 -- throw type errors in 'tcPluginInit' or 'tcPluginStop'.
 --
--- See 'mkTcPluginErrorTy' and 'GHC.TcPlugin.API.emitWork' for examples
+-- See 'mkTcPluginErrorTy' and 'GHC.TcPlugin.API.emitWork' for functions
 -- which require this typeclass.
 type  MonadTcPluginWork :: ( Type -> Type ) -> Constraint
 class MonadTcPlugin m => MonadTcPluginWork m where
+  {-# MINIMAL #-} -- to avoid the methods appearing in the haddocks
   askBuiltins :: m BuiltinDefs
+  askBuiltins = error "askBuiltins: no default implementation"
 instance MonadTcPluginWork ( TcPluginM Solve ) where
   askBuiltins = TcPluginSolveM
     \ builtinDefs
@@ -491,12 +496,12 @@ instance MonadTcPluginWork ( TcPluginM Solve ) where
 instance MonadTcPluginWork ( TcPluginM Rewrite ) where
   askBuiltins = TcPluginRewriteM \ builtinDefs _evBinds -> pure builtinDefs
 
-instance TypeError ( 'Text "Cannot throw type errors in 'tcPluginInit'." )
+instance TypeError ( 'Text "Cannot emit new work in 'tcPluginInit'." )
       => MonadTcPluginWork ( TcPluginM Init ) where
-  askBuiltins = error "Cannot throw type errors in 'tcPluginInit'."
-instance TypeError ( 'Text "Cannot throw type errors in 'tcPluginStop'." )
+  askBuiltins = error "Cannot emit new work in 'tcPluginInit'."
+instance TypeError ( 'Text "Cannot emit new work in 'tcPluginStop'." )
       => MonadTcPluginWork ( TcPluginM Stop ) where
-  askBuiltins = error "Cannot throw type errors in 'tcPluginStop'."
+  askBuiltins = error "Cannot emit new work in 'tcPluginStop'."
 
 -- | Use this type like 'GHC.TypeLits.ErrorMessage' to write an error message.
 -- This error message can then be thrown at the type-level by the plugin,
@@ -541,7 +546,7 @@ data BuiltinDefs =
     , concatTyCon    :: !GHC.TyCon
     , vcatTyCon      :: !GHC.TyCon
 #ifndef HAS_REWRITING
-    , rewrittenTyFamsIORef :: IORef RewrittenTyFamApps
+    , rewrittenTyFamsIORef :: !( IORef RewrittenTyFamApps )
 #endif
     }
 
@@ -553,11 +558,11 @@ data TcPluginDefs s
 
 initBuiltinDefs :: GHC.TcPluginM BuiltinDefs
 initBuiltinDefs = do
-  typeErrorTyCon  <-                           GHC.tcLookupTyCon   GHC.TypeLits.errorMessageTypeErrorFamName
-  textTyCon       <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorTextDataConName
-  showTypeTyCon   <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorShowTypeDataConName
-  concatTyCon     <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorAppendDataConName
-  vcatTyCon       <- fmap GHC.promoteDataCon $ GHC.tcLookupDataCon GHC.TypeLits.typeErrorVAppendDataConName
+  typeErrorTyCon  <-                        GHC.tcLookupTyCon   GHC.TypeLits.errorMessageTypeErrorFamName
+  textTyCon       <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorTextDataConName
+  showTypeTyCon   <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorShowTypeDataConName
+  concatTyCon     <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorAppendDataConName
+  vcatTyCon       <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorVAppendDataConName
 #ifndef HAS_REWRITING
   rewrittenTyFamsIORef <- GHC.tcPluginIO $ newIORef GHC.emptyUDFM
 #endif

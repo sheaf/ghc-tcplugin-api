@@ -18,11 +18,11 @@ creating evidence (to solve constraints), rewriting type family applications, th
 Consider making use of the table of contents to help navigate this documentation;
 don't hesitate to jump between sections to get an overview of the relevant aspects.
 
-For a basic illustration of the functionality, check the examples in the associated
+For an illustration of the functionality, check the examples in the associated
 <https://github.com/sheaf/ghc-tcplugin-api GitHub repository>.
 
 The internal module "GHC.TcPlugin.API.Internal" can be used to directly
-lift and unlift computations in GHC's 'GHC.Tc.TcM' monad, but it is hoped that
+lift and unlift computations in GHC's 'GHC.Tc.Types.TcM' monad, but it is hoped that
 the interface provided in this module is sufficient.
 
 -}
@@ -30,73 +30,76 @@ the interface provided in this module is sufficient.
 module GHC.TcPlugin.API
   ( -- * Basic TcPlugin functionality
 
-    -- | Use 'mkTcPlugin' to pass a type-checking plugin to GHC,
-    -- embedded as a field of GHC's 'GHC.Plugins.Plugin' record.
-    -- 
-    -- Example for a pure plugin:
-    -- 
-    -- > import qualified GHC.Plugins as GHC
-    -- >   ( Plugin(..), defaultPlugin, purePlugin )
-    -- >
-    -- > plugin :: GHC.Plugin
-    -- > plugin =
-    -- >   GHC.defaultPlugin
-    -- >     { GHC.tcPlugin        = \ _args -> Just $ mkTcPlugin myTcPlugin
-    -- >     , GHC.pluginRecompile = GHC.purePlugin
-    -- >     }
-    mkTcPlugin, tcPluginIO
+    -- ** The 'TcPlugin' type
+    TcPlugin(..)
+  , mkTcPlugin
 
     -- ** Plugin state
-    -- | You will likely want to create a record type to hold information looked up
-    -- by the plugin, such as the name of classes or type families your plugin will consider.
+    -- | A type-checker plugin can define its own state, corresponding to the existential parameter @s@
+    -- in the definition of 'TcPlugin'.
+    -- This allows a plugin to look up information a single time
+    -- on initialisation, and pass it on for access in all further invocations of the plugin.
+    --
     -- For example:
     --
     -- > data MyDefinitions { myTyFam :: !TyCon, myClass :: !Class }
     --
-    -- The 'tcPluginInit' part of the plugin looks up all this information and returns it:
+    -- Usually, the 'tcPluginInit' part of the plugin looks up all this information and returns it:
     --
     -- > myTcPluginInit :: TcPluginM Init MyDefinitions
     --
     -- This step should also be used to initialise any external tools,
     -- such as an external SMT solver.
     --
-    -- This datatype will then be passed to other stages of the plugin:
+    -- This information will then be passed to other stages of the plugin:
     --
     -- > myTcPluginSolve :: MyDefinitions -> TcPluginSolver
-
-    -- ** The 'TcPlugin' type
-  , TcPlugin(..), TcPluginStage(..)
-  , TcPluginSolver
-#if HAS_REWRITING
-  , TcPluginSolveResult(..)
-#else
-  , TcPluginSolveResult
-  , pattern TcPluginContradiction, pattern TcPluginOk
-#endif
-  , TcPluginRewriter, TcPluginRewriteResult(..)
 
     -- ** The type-checking plugin monads
 
     -- | Different stages of type-checking plugins have access to different information.
     -- For a unified interface, an MTL-style approach is used, with the 'MonadTcPlugin'
     -- typeclass providing overloading (for operations that work in all stages).
+  , TcPluginStage(..), MonadTcPlugin
   , TcPluginM
-  , MonadTcPlugin
+  , tcPluginIO
   
     -- *** Emitting new work, and throwing type-errors
+
+    -- | Some operations only make sense in the two main phases, solving and rewriting.
+    -- This is captured by the 'MonadTcPluginWork' typeclass, which allows emitting
+    -- new work, including throwing type errors.
   , MonadTcPluginWork
   , TcPluginErrorMessage(..)
   , mkTcPluginErrorTy
 
     -- * Name resolution
+
+    -- | Name resolution is usually the first step in writing a type-checking plugin:
+    -- plugins need to look up the names of the objects they want to manipulate.
+    --
+    -- For instance, to lookup the type family @MyFam@ in module @MyModule@ in package @my-pkg@:
+    -- 
+    -- > lookupMyModule :: MonadTcPlugin m => m Module
+    -- > lookupMyModule = do
+    -- >    findResult <- findImportedModule ( mkModuleName "MyModule" ) ( Just $ fsLit "my-pkg" )
+    -- >    case findResult of
+    -- >      Found _ myModule -> pure myModule
+    -- >      _ -> error "MyPlugin couldn't find MyModule in my-pkg"
+    -- >
+    -- > lookupMyFam :: MonadTcPlugin m => Module -> m TyCon
+    -- > lookupMyFam myModule = tcLookupTyCon =<< lookupOrig myModule ( mkTcOcc "MyFam" )
+    --
+    -- Most of these operations should be performed in 'tcPluginInit', and passed on
+    -- to the other stages: the plugin initialisation is called only once in each module
+    -- that the plugin is used, whereas the solver and rewriter are usually called repeatedly.
     
     -- ** Packages and modules 
 
     -- | Use these functions to lookup a module,
     -- from the current package or imported packages.
-  , findImportedModule
+  , findImportedModule, fsLit, mkModuleName
   , Module, ModuleName, FindResult(..)
-  , FastString, fsLit, mkModuleName
 
     -- ** Names
  
@@ -127,7 +130,7 @@ module GHC.TcPlugin.API
   , tcLookupId
   , promoteDataCon
 
-    -- * Constraints
+    -- * Constraint solving
 
     -- | Type-checking plugins will often want to manipulate constraints,
     -- e.g. solve constraints that GHC can't solve on its own, or emit
@@ -141,6 +144,14 @@ module GHC.TcPlugin.API
     --
     -- When GHC can't solve a Wanted constraint, it will get reported to the
     -- user as a type error.
+
+  , TcPluginSolver
+#if HAS_REWRITING
+  , TcPluginSolveResult(..)
+#else
+  , TcPluginSolveResult
+  , pattern TcPluginContradiction, pattern TcPluginOk
+#endif
 
     -- | The 'tcPluginSolve' method of a typechecker plugin will be invoked
     -- in two different ways:
@@ -159,6 +170,8 @@ module GHC.TcPlugin.API
     -- In both cases, the plugin must respond with constraints of the same flavour,
     -- i.e. in (1) it should return only Givens, and for (2) it should return only
     -- Wanteds; all other constraints will be ignored.
+
+    -- ** Getting started with constraint solving
 
     -- | To get started, it can be helpful to immediately print out all the constraints
     -- that the plugin is given, using 'tcPluginTrace':
@@ -180,52 +193,10 @@ module GHC.TcPlugin.API
     -- If you need more capabilities for pretty-printing documents,
     -- import GHC's "GHC.Utils.Outputable" module.
   , tcPluginTrace
-
-    -- | To solve a constraint, one needs to provide evidence:
-    --
-    --   - a 'Coercion' witnessing an equality between two types,
-    --     in order to solve an equality constraint,
-    --   - an evidence term 'EvExpr', e.g. a dictionary of the methods
-    --     for a typeclass constraint.
-  , newWanted, newGiven
-
-    -- | Derived constraints are like Wanted constraints, except that they
-    -- don't require evidence in order to be solved, and won't be seen
-    -- in error messages if they go unsolved.
-    --
-    -- Solver plugins usually ignore this type of constraint entirely.
-    -- They occur mostly when dealing with functional dependencies and type-family
-    -- injectivity annotations.
-    --
-    -- GHC 9.4 removes this flavour of constraints entirely, subsuming their uses into
-    -- Wanted constraints.
-  , askDeriveds, newDerived
     
-    -- ** Predicates
-    
-    -- | A predicate is the underlying representation of a constraint,
-    -- for instance a record containing the typeclass methods for a typeclass constraint.
+    -- ** Inspecting constraints & predicates
 
-    -- | The following functions allow plugins to create constraints
-    -- for typeclasses and type equalities.
-  , mkClassPred, mkPrimEqPredRole
-
-    -- ** Location information and 'CtLoc's
-
-    -- | When creating new constraints, one still needs a mechanism allowing GHC
-    -- to report a certain source location associated to them when throwing an error,
-    -- as well as other information the type-checker was aware of at that point
-    -- (e.g. available instances, given constraints, etc).
-    --
-    -- This is the purpose of 'CtLoc'.
-  , setCtLocM
-  , setCtLocRewriteM
-
-    -- | 'bumpCtLocDepth' adds one to the "depth" of the constraint.
-    -- Can help avoid loops, by triggering a "maximum depth exceeded" error.
-  , bumpCtLocDepth
-
-    -- ** Canonical and non-canonical constraints
+    -- *** Canonical and non-canonical constraints
 
     -- | A constraint in GHC starts out as "non-canonical", which means that
     -- GHC doesn't know what type of constraint it is.
@@ -237,26 +208,34 @@ module GHC.TcPlugin.API
     -- non-canonical constraint, letting GHC canonicalise it.
   , mkNonCanonical
 
-    -- ** Analysing types, constraints & predicates
+    -- *** Predicates
 
-    -- | A type-checking plugin might need to inspect constraints itself
-    -- to figure out what it is dealing with.
+    -- | A type-checking plugin will usually need to inspect constraints,
+    -- so that it can pick out the constraints it is going to interact with.
     -- 
     -- In general, type-checking plugins can encounter all sorts of constraints,
     -- whether in canonical form or not.
     -- In order to handle these constraints in a uniform manner, it is usually
     -- preferable to inspect each constraint's predicate, which can be obtained
     -- by using 'classifyPredType' and 'ctPred'.
+    --
+    -- This allows the plugin to determine what kind of constraints it is dealing with:
+    --
+    --   - an equality constraint? at 'Nominal' or 'Representational' role?
+    --   - a type-class constraint? for which class?
+    --   - an irreducible constraint, e.g. something of the form @c a@?
+    --   - a quantified constraint?
   , classifyPredType, ctPred
+
+    -- | == Some further functions for inspecting constraints
   , eqType
   , ctLoc, ctEvidence, ctFlavour, ctEqRel, ctOrigin
-  , getInstEnvs
 
     -- ** Constraint evidence
   
     -- *** Coercions
 
-    -- | Coercions are the evidence for type equalities.
+    -- | 'GHC.Core.TyCo.Rep.Coercion's are the evidence for type equalities.
     -- As such, when proving an equality, a type-checker plugin needs
     -- to construct the associated coercions.
   , mkPluginUnivCo
@@ -267,12 +246,11 @@ module GHC.TcPlugin.API
 
     -- *** Evidence terms
 
-    -- | Evidence terms are a slightly more general notion than 'Coercion's,
-    -- as they can also be used as evidence for typeclass constraints.
+    -- | Typeclass constraints have a different notion of evidence: evidence terms.
     --
-    -- This means that a plugin that wants to solve a class constraint
-    -- will need to provide an evidence term, making use of the evidence
-    -- that is already available.
+    -- A plugin that wants to solve a class constraint will need to provide
+    -- an evidence term. Such evidence can be created from scratch, or it can be obtained
+    -- by combining evidence that is already available.
 
   , mkPluginUnivEvTerm
   , newEvVar, setEvBind
@@ -294,7 +272,53 @@ module GHC.TcPlugin.API
   , classDataCon
   , module GHC.Core.Make
 
-    -- * Type family applications
+    -- | ==== Class instances
+
+    -- | In some cases, a type-checking plugin might need to access the
+    -- class instances that are currently in scope, e.g. to obtain certain
+    -- evidence terms.
+  , getInstEnvs
+
+    -- ** Emitting new constraints
+
+  , newWanted, newGiven
+
+    -- | The following functions allow plugins to create constraints
+    -- for typeclasses and type equalities.
+  , mkClassPred, mkPrimEqPredRole
+  
+    -- | === Deriveds
+
+    -- | Derived constraints are like Wanted constraints, except that they
+    -- don't require evidence in order to be solved, and won't be seen
+    -- in error messages if they go unsolved.
+    --
+    -- Solver plugins usually ignore this type of constraint entirely.
+    -- They occur mostly when dealing with functional dependencies and type-family
+    -- injectivity annotations.
+    --
+    -- GHC 9.4 removes this flavour of constraints entirely, subsuming their uses into
+    -- Wanted constraints.
+  , askDeriveds, newDerived
+
+    -- ** Location information and 'CtLoc's
+
+    -- | When creating new constraints, one still needs a mechanism allowing GHC
+    -- to report a certain source location associated to them when throwing an error,
+    -- as well as other information the type-checker was aware of at that point
+    -- (e.g. available instances, given constraints, etc).
+    --
+    -- This is the purpose of 'CtLoc'.
+  , setCtLocM
+  , setCtLocRewriteM
+
+    -- | 'bumpCtLocDepth' adds one to the "depth" of the constraint.
+    -- Can help avoid loops, by triggering a "maximum depth exceeded" error.
+  , bumpCtLocDepth
+
+    -- * Rewriting type-family applications
+
+  , TcPluginRewriter, TcPluginRewriteResult(..)
 
     -- ** Querying for type family reductions
 
@@ -308,7 +332,7 @@ module GHC.TcPlugin.API
     -- pieces of information:
     --
     --   - the type that the type family application reduces to,
-    --   - evidence for this reduction, i.e. a 'Coercion' proving the equality.
+    --   - evidence for this reduction, i.e. a 'GHC.Core.TyCo.Rep.Coercion' proving the equality.
     --
     -- In the rewriting stage, type-checking plugins have access to the rewriter
     -- environment 'RewriteEnv', which has information about the location of the
@@ -380,11 +404,12 @@ module GHC.TcPlugin.API
 
     -- | These are the types that the plugin will inspect and manipulate.
 
-    -- | = END OF API DOCUMENTATION
+    -- | = END OF API DOCUMENTATION, RE-EXPORTS FOLLOW
 
     -- | == Names
   , Name, OccName, TyThing, TcTyThing
   , Class(classTyCon), DataCon, TyCon, Id
+  , FastString
 
     -- | == Constraints
   , Pred(..), EqRel(..), FunDep, CtFlavour
@@ -650,11 +675,11 @@ isTouchableTcPluginM = liftTcPluginM . GHC.isTouchableTcPluginM
 
 -- | Zonk the given type, which takes the metavariables in the type and
 -- substitutes their actual value.
-zonkTcType :: MonadTcPlugin m => TcType -> m TcType
+zonkTcType :: MonadTcPluginWork m => TcType -> m TcType
 zonkTcType = liftTcPluginM . GHC.zonkTcType
 
 -- | Zonk a given constraint.
-zonkCt :: MonadTcPlugin m => Ct -> m Ct
+zonkCt :: MonadTcPluginWork m => Ct -> m Ct
 zonkCt = liftTcPluginM . GHC.zonkCt
 
 --------------------------------------------------------------------------------
@@ -731,8 +756,13 @@ setEvBind ev_bind = do
 
 -- | Conjure up a coercion witnessing an equality between two types
 -- at the given 'Role' ('Nominal' or 'Representational').
+--
+-- This amounts to telling GHC "believe me, these things are equal".
+--
+-- The plugin is responsible for not emitting any unsound coercions,
+-- such as a coercion between 'Int' and 'Float'.
 mkPluginUnivCo
-  :: String -- ^ Name of equality (for debugging)
+  :: String -- ^ Name of equality (for the plugin's internal use, or for debugging)
   -> Role
   -> TcType -- ^ LHS
   -> TcType -- ^ RHS
@@ -742,9 +772,12 @@ mkPluginUnivCo str role lhs rhs = mkUnivCo ( PluginProv str ) role lhs rhs
 -- | Conjure up an evidence term for an equality between two types
 -- at the given 'Role' ('Nominal' or 'Representational').
 -- 
--- Use this to supply a proof of a wanted equality in 'TcPluginOk'.
+-- This can be used to supply a proof of a wanted equality in 'TcPluginOk'.
+--
+-- The plugin is responsible for not emitting any unsound equalities,
+-- such as an equality between 'Int' and 'Float'.
 mkPluginUnivEvTerm
-  :: String -- ^ Name of equality (for debugging)
+  :: String -- ^ Name of equality (for the plugin's internal use, or for debugging)
   -> Role
   -> TcType -- ^ LHS
   -> TcType -- ^ RHS

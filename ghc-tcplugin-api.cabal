@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.1.0.0
+version:        0.2.0.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
@@ -8,14 +8,15 @@ author:         Sam Derbyshire
 maintainer:     Sam Derbyshire
 copyright:      2021 Sam Derbyshire
 homepage:       https://github.com/sheaf/ghc-tcplugin-api
+category:       Type System, GHC, Plugin
 description:
 
-  This library attempts to provide a streamlined monadic interface
+  This library provides a streamlined monadic interface
   for writing GHC type-checking plugins.
 
   Each stage in a type-checking plugin (initialisation, solving, rewriting,
   shutdown) has a corresponding monad, preventing operations that are only
-  allowed in some stages to be used in the others stages.
+  allowed in some stages to be used in the other stages.
   Operations that work across multiple stages are overloaded across monads
   using MTL-like typeclasses.
 
@@ -24,6 +25,9 @@ description:
 
   Please refer to the <https://github.com/sheaf/ghc-tcplugin-api associated GitHub repository>
   for example usage.
+
+extra-source-files:
+  changelog.md
 
 library
 
@@ -39,14 +43,12 @@ library
     Haskell2010
 
   ghc-options:
-    -O1
     -Wall
     -Wcompat
     -fwarn-missing-local-signatures
     -fwarn-incomplete-uni-patterns
     -fwarn-missing-deriving-strategies
     -fno-warn-unticked-promoted-constructors
-    -dcore-lint
 
   hs-source-dirs:
     src

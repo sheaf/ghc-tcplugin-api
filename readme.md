@@ -1,23 +1,30 @@
 
 
-# ghc-tcplugin-api
+# ghc-tcplugin-api <a href="https://hackage.haskell.org/package/ghc-tcplugin-api" alt="Hackage"><img src="https://img.shields.io/hackage/v/ghc-tcplugin-api.svg" /></a>
 
-This library attempts to provide a convenient interface for authors of GHC type-checking plugins.
+This library provides a convenient and cross-compatible interface for authors
+of GHC type-checking plugins (starting from GHC 9.0).    
 
 Different stages of a type-checking plugin (initialisation, solving, rewriting, shutdown) are given
 different monads to operate within. This ensures operations that only make sense in one context
 aren't mistakenly carried out in another.    
 
 To provide a unified interface to these monads (whenever this makes sense), two MTL-style typeclasses
-are provided: `MonadTcPlugin` and `MonadTcPluginTypeError`. The first enables overloading of
-monadic operations common to all stages, and the second allows plugins to throw custom type-errors,
-but only in the solving or rewriting phases.   
-`MonadTcPlugin` is internally implemented using lifting and unlifting of GHC's `TcM` monad, but it
-is hoped that users will not need to access these internals. 
+are provided: `MonadTcPlugin` and `MonadTcPluginWork`.
 
-This library provides functionality for throwing custom type-errors, by means of the datatype
-`TcPluginErrorMessage` (which mimics the `ErrorMessage` datakind from `GHC.TypeLits`) and the
-interpreter `mkTcPluginErrorTy`.    
+- `MonadTcPlugin` enables overloading of monadic operations common to all stages,
+  such as lifting `IO` operations or performing name resolution.    
+  `MonadTcPlugin` is internally implemented using lifting and unlifting of GHC's `TcM` monad,
+  but it is hoped that users will not need to access these internals. 
+
+- `MonadTcPluginWork` allows plugins to emit new work (additional constraints for GHC to process),
+  including throwing custom type errors. These operations are only available in the solving
+  and rewriting stages of a type-checking plugin.
+  Helpers for throwing custom type-errors are also provided, by means of the datatype
+  `TcPluginErrorMessage` (which mimics the `ErrorMessage` datakind from `GHC.TypeLits`) and the
+  interpreter `mkTcPluginErrorTy`.    
+
+## Discoverability
 
 One goal of this library is to ensure that authors of type-checking plugins should, for the most part,
 only need to import this library for their type-checking plugin needs, and not the `ghc` package itself.    
@@ -27,7 +34,10 @@ usecase using this library's interface. This can be particularly useful when usi
 
 ## Compatibility
 
-This library makes use of GHC's new API for rewriting type-families in typechecker plugins,
+This library provides a unified interface that works across different GHC versions (starting from GHC 9.0),
+aiming to reduce the CPP burden imposed on authors of type-checking plugins.    
+
+We make use of GHC's new API for rewriting type-families in typechecker plugins,
 which is scheduled to land in GHC 9.4.    
 A compatibility layer is provided, which retro-fits the rewriting functionality onto GHC 9.0 and 9.2.    
 
