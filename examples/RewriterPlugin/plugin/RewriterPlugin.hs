@@ -100,21 +100,25 @@ rewrite_add pluginDefs@( PluginDefs { .. } ) _givens tys
       -- Erroring on 'BadNat'.
       | Just ( badNat, [] ) <- API.splitTyConApp_maybe a
       , badNat == badNatTyCon
-      -> throwTypeError $
+      -> throwTypeError badRedn $
             Txt "RewriterPlugin detected a BadNat in the first argument of (+):"
               :-:
             PrintType a
       | Just ( badNat, [] ) <- API.splitTyConApp_maybe b
       , badNat == badNatTyCon
-      -> throwTypeError $
+      -> throwTypeError badRedn $
             Txt "RewriterPlugin detected a BadNat in the second argument of (+):"
               :-:
             PrintType b
       -- No rewriting otherwise.
       | otherwise
-      -> pure $ API.TcPluginNoRewrite []
+      -> pure API.TcPluginNoRewrite
   | otherwise
-  = pure $ API.TcPluginNoRewrite []
+  = pure API.TcPluginNoRewrite
+  where
+    badRedn :: API.Reduction
+    badRedn = API.mkTyFamAppReduction "RewriterPlugin" API.Nominal
+      addTyCon tys (API.mkTyConApp badNatTyCon [])
 
 mkCancellableWanted :: PluginDefs -> API.TcType -> API.TcPluginM API.Rewrite API.Ct
 mkCancellableWanted ( PluginDefs { .. } ) ty = do
@@ -127,12 +131,12 @@ mkCancellableWanted ( PluginDefs { .. } ) ty = do
   ctEv <- API.setCtLocM ctLoc $ API.newWanted ctLoc ctPredTy
   pure ( API.mkNonCanonical ctEv )
 
-throwTypeError :: API.TcPluginErrorMessage -> API.TcPluginM API.Rewrite API.TcPluginRewriteResult
-throwTypeError msg = do
+throwTypeError :: API.Reduction -> API.TcPluginErrorMessage -> API.TcPluginM API.Rewrite API.TcPluginRewriteResult
+throwTypeError badRedn msg = do
   env <- API.askRewriteEnv
   errorTy <- API.mkTcPluginErrorTy msg
   let
     errorCtLoc :: API.CtLoc
     errorCtLoc = API.bumpCtLocDepth $ API.rewriteEnvCtLoc env
   errorCtEv <- API.setCtLocM errorCtLoc $ API.newWanted errorCtLoc errorTy
-  pure $ API.TcPluginNoRewrite [ API.mkNonCanonical errorCtEv ]
+  pure $ API.TcPluginRewriteTo badRedn [ API.mkNonCanonical errorCtEv ]

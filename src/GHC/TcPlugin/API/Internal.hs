@@ -183,7 +183,7 @@ type TcPluginRewriter
 --
 -- __Note__: this is not the same record as GHC's built-in
 -- 'GHC.Tc.Types.TcPlugin' record. Use 'mkTcPlugin' for the conversion.
--- 
+--
 -- To create a type-checking plugin, define something of this type
 -- and then call 'mkTcPlugin' on the result.
 -- This will return something that can be passed to 'GHC.Plugins.Plugin':
@@ -316,7 +316,7 @@ class Monad m => MonadTcPlugin m where
   --
   -- If this type signature seems confusing, I recommend reading Alexis King's
   -- excellent blog post on @MonadBaseControl@:
-  -- 
+  --
   -- <https://lexi-lambda.github.io/blog/2019/09/07/demystifying-monadbasecontrol/ Demystifying MonadBaseControl>
   unsafeWithRunInTcM :: ( ( forall a. m a -> GHC.TcM a ) -> GHC.TcM b ) -> m b
 
@@ -453,7 +453,6 @@ mkTcPlugin ( TcPlugin
         evBindsVar <- GHC.getEvBindsTcPluginM
         shimRewriter
           givens deriveds wanteds
-          ( rewrittenTyFamsIORef tcPluginBuiltinDefs )
           ( fmap
               ( \ userRewriter rewriteEnv gs tys ->
                 tcPluginRewriteM ( userRewriter gs tys )

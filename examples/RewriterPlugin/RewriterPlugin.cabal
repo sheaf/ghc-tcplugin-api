@@ -51,7 +51,7 @@ library
     RewriterPlugin
 
 library RewriterPlugin-Examples
-  
+
   import:
     common
 
@@ -64,7 +64,6 @@ library RewriterPlugin-Examples
     RewriterPlugin.Examples.Fail2
     RewriterPlugin.Examples.Fail3
     RewriterPlugin.Examples.Fail4
-    RewriterPlugin.Examples.Fail5
 
   build-depends:
     RewriterPlugin

@@ -133,7 +133,7 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
     tcPluginTrace "SystemF.Plugin rewrite }" ( ppr res )
     pure ( finish res )
   | otherwise
-  = pure $ TcPluginNoRewrite []
+  = pure $ TcPluginNoRewrite
   where
 
     finish :: Maybe Type -> TcPluginRewriteResult
@@ -141,7 +141,7 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
       TcPluginRewriteTo
         ( mkTyFamAppReduction "SystemF.Plugin" Nominal applySubTyCon applySubArgs ty )
         []
-    finish _ = TcPluginNoRewrite []
+    finish _ = TcPluginNoRewrite
 
 
     rewriteApplySub :: Type -> Type -> Type -> Type -> Type -> RewriteM Type
@@ -186,14 +186,14 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
             , mkTyConApp composeTyCon [ kψ2, kψ1, kξ1, t, s ]
             , r
             ]
-      -- (MapEnv) t :*: KExtend s a 
+      -- (MapEnv) t :*: KExtend s a
       --     ===> KExtend ( t :*: s ) ( ApplySub t a )
       | Just ( tc1, [ _  , kψ1, kξ1, t, ext ] ) <- splitTyConApp_maybe sub
       , tc1 == composeTyCon
       , Just ( tc2, [ kϕ2, kψ2,   l, s,   a ] ) <- splitTyConApp_maybe ext
       , tc2 == extendTyCon
       = do
-        lift $ tcPluginTrace "MapEnv" ( ppr t $$ ppr s ) 
+        lift $ tcPluginTrace "MapEnv" ( ppr t $$ ppr s )
         rewrote
         go $
           mkTyConApp extendTyCon
@@ -268,7 +268,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
           mkTyConApp underTyCon
           [ kϕ2, kψ1, l
           , mkTyConApp composeTyCon [kϕ2, kϕ1, kψ1, t, s]
-          ]          
+          ]
       -- (Lift2) ( u :*: KUnder t ) :*: KUnder s
       --    ===> u :*: KUnder ( t :*: s )
       | Just ( tc1, [ _, _, _, u_under_t, under_s ] ) <- splitTyConApp_maybe sub

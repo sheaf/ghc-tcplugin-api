@@ -63,7 +63,7 @@ module GHC.TcPlugin.API
   , TcPluginStage(..), MonadTcPlugin
   , TcPluginM
   , tcPluginIO
-  
+
     -- *** Emitting new work, and throwing type-errors
 
     -- | Some operations only make sense in the two main phases, solving and rewriting.
@@ -79,7 +79,7 @@ module GHC.TcPlugin.API
     -- plugins need to look up the names of the objects they want to manipulate.
     --
     -- For instance, to lookup the type family @MyFam@ in module @MyModule@ in package @my-pkg@:
-    -- 
+    --
     -- > lookupMyModule :: MonadTcPlugin m => m Module
     -- > lookupMyModule = do
     -- >    findResult <- findImportedModule ( mkModuleName "MyModule" ) ( Just $ fsLit "my-pkg" )
@@ -93,8 +93,8 @@ module GHC.TcPlugin.API
     -- Most of these operations should be performed in 'tcPluginInit', and passed on
     -- to the other stages: the plugin initialisation is called only once in each module
     -- that the plugin is used, whereas the solver and rewriter are usually called repeatedly.
-    
-    -- ** Packages and modules 
+
+    -- ** Packages and modules
 
     -- | Use these functions to lookup a module,
     -- from the current package or imported packages.
@@ -102,7 +102,7 @@ module GHC.TcPlugin.API
   , Module, ModuleName, FindResult(..)
 
     -- ** Names
- 
+
     -- *** Occurence names
 
     -- | The most basic type of name is the 'OccName', which is a
@@ -161,7 +161,7 @@ module GHC.TcPlugin.API
     -- 2. to solve Wanted constraints.
     --
     -- The plugin can then respond in one of two ways:
-    -- 
+    --
     --   - with @TcPluginOk solved new@, where @solved@ is a list of solved constraints
     --     and @new@ is a list of new constraints for GHC to process;
     --   - with @TcPluginContradiction contras@, where @contras@ is a list of impossible
@@ -175,14 +175,14 @@ module GHC.TcPlugin.API
 
     -- | To get started, it can be helpful to immediately print out all the constraints
     -- that the plugin is given, using 'tcPluginTrace':
-    -- 
+    --
     -- > solver _ givens wanteds = do
     -- >   tcPluginTrace "---Plugin start---" (ppr givens $$ ppr wanteds)
     -- >   pure $ TcPluginOk [] []
     --
     -- This creates a plugin that prints outs the constraints it is passed,
     -- without doing anything with them.
-    -- 
+    --
     -- To see this output, you will need to pass the flags @-ddump-tc-trace@
     -- and @-ddump-to-file@ to GHC. This will output the trace as a log file,
     -- and you can search for @"---Plugin start---"@ to find the plugin inputs.
@@ -193,7 +193,7 @@ module GHC.TcPlugin.API
     -- If you need more capabilities for pretty-printing documents,
     -- import GHC's "GHC.Utils.Outputable" module.
   , tcPluginTrace
-    
+
     -- ** Inspecting constraints & predicates
 
     -- *** Canonical and non-canonical constraints
@@ -212,7 +212,7 @@ module GHC.TcPlugin.API
 
     -- | A type-checking plugin will usually need to inspect constraints,
     -- so that it can pick out the constraints it is going to interact with.
-    -- 
+    --
     -- In general, type-checking plugins can encounter all sorts of constraints,
     -- whether in canonical form or not.
     -- In order to handle these constraints in a uniform manner, it is usually
@@ -232,7 +232,7 @@ module GHC.TcPlugin.API
   , ctLoc, ctEvidence, ctFlavour, ctEqRel, ctOrigin
 
     -- ** Constraint evidence
-  
+
     -- *** Coercions
 
     -- | 'GHC.Core.TyCo.Rep.Coercion's are the evidence for type equalities.
@@ -286,7 +286,7 @@ module GHC.TcPlugin.API
     -- | The following functions allow plugins to create constraints
     -- for typeclasses and type equalities.
   , mkClassPred, mkPrimEqPredRole
-  
+
     -- | === Deriveds
 
     -- | Derived constraints are like Wanted constraints, except that they
@@ -380,7 +380,7 @@ module GHC.TcPlugin.API
   , zonkCt
 
     -- ** Map-like data structures based on 'Unique's
-    
+
     -- | Import "GHC.Types.Unique.FM" or "GHC.Types.Unique.DFM" for
     -- a more complete interface to maps whose keys are 'Unique's.
 
@@ -446,9 +446,6 @@ import GHC.Core.Class
 import GHC.Core.Coercion
   ( mkReflCo, mkSymCo, mkTransCo
   , mkUnivCo, mkPrimEqPredRole
-#if HAS_REWRITING
-  , Reduction(..)
-#endif
   )
 import GHC.Core.Coercion.Axiom
   ( Role(..) )
@@ -465,6 +462,10 @@ import GHC.Core.Predicate
   ( Pred(..), EqRel(..)
   , classifyPredType, mkClassPred
   )
+#if HAS_REWRITING
+import GHC.Core.Reduction
+  ( Reduction(..) )
+#endif
 import GHC.Core.TyCon
   ( TyCon(..) )
 import GHC.Core.TyCo.Rep
@@ -661,7 +662,7 @@ matchFam tycon args =
 newUnique :: MonadTcPlugin m => m Unique
 newUnique = liftTcPluginM GHC.newUnique
 
--- | Create a new meta-variable (unification variable) of the given kind. 
+-- | Create a new meta-variable (unification variable) of the given kind.
 newFlexiTyVar :: MonadTcPlugin m => Kind -> m TcTyVar
 newFlexiTyVar = liftTcPluginM . GHC.newFlexiTyVar
 
@@ -696,10 +697,10 @@ newDerived :: MonadTcPluginWork m => CtLoc -> PredType -> m CtEvidence
 newDerived loc pty = liftTcPluginM $ GHC.newDerived loc pty
 
 -- | Create a new given constraint.
--- 
+--
 -- Unlike 'newWanted' and 'newDerived', we need to supply evidence
 -- for this constraint.
--- 
+--
 -- Use 'setCtLocM' to pass along the location information,
 -- as only the 'CtOrigin' gets taken into account here.
 newGiven :: CtLoc -> PredType -> EvExpr -> TcPluginM Solve CtEvidence
@@ -771,7 +772,7 @@ mkPluginUnivCo str role lhs rhs = mkUnivCo ( PluginProv str ) role lhs rhs
 
 -- | Conjure up an evidence term for an equality between two types
 -- at the given 'Role' ('Nominal' or 'Representational').
--- 
+--
 -- This can be used to supply a proof of a wanted equality in 'TcPluginOk'.
 --
 -- The plugin is responsible for not emitting any unsound equalities,
@@ -797,4 +798,11 @@ mkTyFamAppReduction
   -> TcType   -- ^ The type that the type family application reduces to
   -> Reduction
 mkTyFamAppReduction str role tc args ty =
-  Reduction ty ( mkPluginUnivCo str role ty ( mkTyConApp tc args ) )
+  -- The rewriter/flattener in GHC 9.2/GHC 9.0 uses coercions
+  -- in which the rewritten type is on the left.
+  -- Starting from GHC 9.4, the rewritten type is always on the right.
+#if HAS_REWRITING
+  Reduction ( mkPluginUnivCo str role ( mkTyConApp tc args ) ty ) ty
+#else
+  Reduction ( mkPluginUnivCo str role ty ( mkTyConApp tc args ) ) ty
+#endif
