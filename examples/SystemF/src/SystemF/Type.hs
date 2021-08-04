@@ -60,7 +60,7 @@ type String = LitTy @Hs.String
 --------------------------------------
 -- Renaming and substitution of types.
 
-infixl 8 :*:
+infixl 8 :.:
 -- | A type renaming/substitution, which can be applied using 'ApplySub'.
 type KSub :: KContext -> KContext -> Hs.Type
 data KSub kϕ kψ where
@@ -73,7 +73,7 @@ data KSub kϕ kψ where
   -- | Extend a substitution with a given type.
   KExtend :: KSub kϕ kψ -> Type kψ k -> KSub (kϕ :&* k) kψ
   -- | Compose two renamings.
-  (:*:)   :: forall {kϕ} {kψ} {kξ}. KSub kψ kξ -> KSub kϕ kψ -> KSub kϕ kξ
+  (:.:)   :: forall {kϕ} {kψ} {kξ}. KSub kψ kξ -> KSub kϕ kψ -> KSub kϕ kξ
 
 -- | Apply a renaming/substitution to a type variable.
 type SubVar :: KSub kϕ kψ -> KIdx kϕ k -> Type kψ k
@@ -86,12 +86,12 @@ type family SubVar s i where
   SubVar (KExtend s _) (KS i) = SubVar s i          -- (RVarCons)
 
   -- Composition.
-  SubVar (t :*: KId)              i      = SubVar t i                                      -- (IdL)
-  SubVar (t :*: KBind)            i      = SubVar t (KS i)                                 -- (VarShift2)
-  SubVar (t :*: KUnder _)         KZ     = SubVar t KZ                                     -- (FVarLift2)
-  SubVar (t :*: KUnder s)         (KS i) = SubVar (t :*: KBind :*: s) i                    -- (RVarLift2)
-  SubVar (t :*: ( KExtend s a ) ) i      = SubVar (KExtend ( t :*: s ) ( ApplySub t a )) i -- (MapEnv)
-  SubVar (t :*: ( s :*: r ))      i      = SubVar (( t :*: s ) :*: r) i                    -- (AssEnv)
+  SubVar (t :.: KId)              i      = SubVar t i                                      -- (IdL)
+  SubVar (t :.: KBind)            i      = SubVar t (KS i)                                 -- (VarShift2)
+  SubVar (t :.: KUnder _)         KZ     = SubVar t KZ                                     -- (FVarLift2)
+  SubVar (t :.: KUnder s)         (KS i) = SubVar (t :.: KBind :.: s) i                    -- (RVarLift2)
+  SubVar (t :.: ( KExtend s a ) ) i      = SubVar (KExtend ( t :.: s ) ( ApplySub t a )) i -- (MapEnv)
+  SubVar (t :.: ( s :.: r ))      i      = SubVar (( t :.: s ) :.: r) i                    -- (AssEnv)
 
 -- | Apply a renaming/substitution to a general type.
 type ApplySub :: KSub kϕ kψ -> Type kϕ k -> Type kψ k
@@ -128,12 +128,12 @@ subVarSing (SKUnder s)    (SKS i) = weakenSing $ subVarSing s i
 subVarSing (SKExtend _ a) SKZ     = a
 subVarSing (SKExtend s _) (SKS i) = subVarSing s i
 -- Composition.
-subVarSing (t :%*: SKId)        i       = subVarSing t i
-subVarSing (t :%*: SKBind)      i       = subVarSing t (SKS i)
-subVarSing (t :%*: SKUnder _)   SKZ     = subVarSing t SKZ
-subVarSing (t :%*: SKUnder s)   (SKS i) = subVarSing (t :%*: SKBind :%*: s) i
-subVarSing (t :%*: (SKExtend s a)) i    = subVarSing ( SKExtend ( t :%*: s ) ( applySubSing t a )) i
-subVarSing (t :%*: ( s :%*: r )) i      = subVarSing ( ( t :%*: s) :%*: r ) i
+subVarSing (t :%.: SKId)        i       = subVarSing t i
+subVarSing (t :%.: SKBind)      i       = subVarSing t (SKS i)
+subVarSing (t :%.: SKUnder _)   SKZ     = subVarSing t SKZ
+subVarSing (t :%.: SKUnder s)   (SKS i) = subVarSing (t :%.: SKBind :%.: s) i
+subVarSing (t :%.: (SKExtend s a)) i    = subVarSing ( SKExtend ( t :%.: s ) ( applySubSing t a )) i
+subVarSing (t :%.: ( s :%.: r )) i      = subVarSing ( ( t :%.: s) :%.: r ) i
 
 weakenSing :: Sing a -> Sing (Weaken @l a)
 weakenSing = applySubSing SKBind
@@ -158,13 +158,13 @@ data instance Sing (i :: KIdx kϕ k) where
   SKZ :: Sing KZ
   SKS :: Sing i -> Sing (KS i)
 
-infixl 8 :%*:
+infixl 8 :%.:
 data instance Sing (s :: KSub kϕ kψ) where
   SKId     :: Sing KId
   SKBind   :: Sing KBind
   SKUnder  :: Sing s -> Sing (KUnder s)
   SKExtend :: Sing k -> Sing s -> Sing (KExtend k s)
-  (:%*:)   :: Sing s -> Sing t -> Sing (s :*: t)
+  (:%.:)   :: Sing s -> Sing t -> Sing (s :.: t)
 
 --------------------------------------------------------------------------------
 -- Displaying
