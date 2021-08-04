@@ -10,16 +10,16 @@ different monads to operate within. This ensures operations that only make sense
 aren't mistakenly carried out in another.    
 
 To provide a unified interface to these monads (whenever this makes sense), two MTL-style typeclasses
-are provided: `MonadTcPlugin` and `MonadTcPluginWork`.
+are provided: `MonadTcPlugin` and `MonadTcPluginWork`.    
 
 - `MonadTcPlugin` enables overloading of monadic operations common to all stages,
   such as lifting `IO` operations or performing name resolution.    
   `MonadTcPlugin` is internally implemented using lifting and unlifting of GHC's `TcM` monad,
-  but it is hoped that users will not need to access these internals. 
+  but it is hoped that users will not need to access these internals.    
 
 - `MonadTcPluginWork` allows plugins to emit new work (additional constraints for GHC to process),
   including throwing custom type errors. These operations are only available in the solving
-  and rewriting stages of a type-checking plugin.
+  and rewriting stages of a type-checking plugin.    
   Helpers for throwing custom type-errors are also provided, by means of the datatype
   `TcPluginErrorMessage` (which mimics the `ErrorMessage` datakind from `GHC.TypeLits`) and the
   interpreter `mkTcPluginErrorTy`.    
@@ -43,12 +43,13 @@ A compatibility layer is provided, which retro-fits the rewriting functionality 
 
 ## Documentation
 
-The haddocks for this library is available online [here](https://sheaf.github.io/ghc-tcplugin-api/).
+The [package documentation](https://hackage.haskell.org/package/ghc-tcplugin-api) includes an overview of type-checking plugins,
+and should provide a good starting point for anyone interested in writing a type-checking plugin.
 
 ## Examples
 
 A simple example plugin which rewrites type family applications, emitting wanted constraints and
-throwing custom type errors as it goes, is provided [here](examples/RewriterPlugin/plugin/RewriterPlugin.hs).
+throwing custom type errors as it goes, is provided [here](examples/RewriterPlugin/plugin/RewriterPlugin.hs).    
 
 A more complex example, that of type-checking an intrinsically typed System F, is provided
 [here](examples/SystemF/src/SystemF/Plugin.hs). This implements the equational theory of the confluent calculus
