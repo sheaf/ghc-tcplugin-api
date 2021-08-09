@@ -652,7 +652,9 @@ matchFam :: MonadTcPlugin m
          -> m ( Maybe Reduction )
 matchFam tycon args =
 #ifndef HAS_REWRITING
-  fmap mkReduction <$>
+  fmap ( \ (co,ty) -> mkReduction (mkSymCo co) ty ) <$>
+  -- GHC 9.0 and 9.2 use a different orientation
+  -- when rewriting type family applications.
 #endif
   ( liftTcPluginM $ GHC.matchFam tycon args )
 
@@ -798,11 +800,4 @@ mkTyFamAppReduction
   -> TcType   -- ^ The type that the type family application reduces to
   -> Reduction
 mkTyFamAppReduction str role tc args ty =
-  -- The rewriter/flattener in GHC 9.2/GHC 9.0 uses coercions
-  -- in which the rewritten type is on the left.
-  -- Starting from GHC 9.4, the rewritten type is always on the right.
-#if HAS_REWRITING
   Reduction ( mkPluginUnivCo str role ( mkTyConApp tc args ) ty ) ty
-#else
-  Reduction ( mkPluginUnivCo str role ty ( mkTyConApp tc args ) ) ty
-#endif

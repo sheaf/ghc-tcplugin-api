@@ -3,6 +3,7 @@
 {-# LANGUAGE CPP             #-}
 {-# LANGUAGE DerivingVia     #-}
 {-# LANGUAGE LambdaCase      #-}
+{-# LANGUAGE NamedFieldPuns  #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE TupleSections   #-}
 {-# LANGUAGE ViewPatterns    #-}
@@ -15,9 +16,17 @@ the library to support a limited form of type-family rewriting
 in typechecking plugins on GHC 9.0 and 9.2.
 -}
 
-module GHC.TcPlugin.API.Internal.Shim where
+module GHC.TcPlugin.API.Internal.Shim
+  ( Reduction(..), mkReduction
+  , TcPluginSolveResult, TcPluginRewriteResult(..)
+  , RewriteEnv(..)
+  , shimRewriter
+  )
+  where
 
 -- base
+import Prelude
+  hiding ( Floating(cos), iterate )
 import Control.Monad
   ( forM, when )
 #if !MIN_VERSION_ghc(9,2,0)
@@ -39,32 +48,16 @@ import Control.Monad.Trans.State.Strict
 
 -- ghc
 import GHC.Core.Coercion
-  ( castCoercionKind1, coercionRKind
-  , mkReflCo, mkSymCo, mkFunCo, mkHomoForAllCos
-  , mkTransCo, mkAppCos, mkNomReflCo, mkSubCo
+  ( mkReflCo, mkSymCo
+  , mkAppCos, mkNomReflCo, mkSubCo
   , mkTyConAppCo, tyConRolesX
   , tyConRolesRepresentational
-  , simplifyArgsWorker
-#if !MIN_VERSION_ghc(9,2,0)
-  , coToMCo
-#endif
   )
-#if MIN_VERSION_ghc(9,2,0)
-import GHC.Core.Map.Type
-  ( LooseTypeMap )
-#else
-import GHC.Core.Map
-  ( LooseTypeMap )
-#endif
 import GHC.Core.Predicate
   ( EqRel(..), eqRelRole )
 import GHC.Core.TyCo.Rep
-  ( Type(..), Kind, Coercion(..)
-  , TyCoBinder(..)
-  , MCoercion(..), MCoercionN
-  , binderVars, mkForAllTys
-  , isNamedBinder
-  , mkTyVarTy
+  ( Type(..), Kind, Coercion(..), MCoercion(..), TyCoBinder(..)
+  , isNamedBinder, mkTyVarTy
   )
 import GHC.Core.TyCon
   ( TyCon(..), TyConBinder, TyConBndrVis(..)
@@ -78,19 +71,14 @@ import GHC.Core.TyCon
   )
 import GHC.Core.Type
   ( TyVar
-  , tcView
-  , mkCoercionTy, mkCastTy, mkAppTys
-  , mkTyConApp, mkScaled, coreView
-  , tymult, tyVarKind
+  , tcView , mkTyConApp, mkScaled, coreView , tymult, tyVarKind
   )
 #if MIN_VERSION_ghc(9,2,0)
 import GHC.Data.Maybe
   ( firstJustsM )
 #endif
-import GHC.Data.TrieMap
-  ( ListMap )
 import GHC.Tc.Plugin
-  ( tcPluginIO, newWanted, newDerived )
+  ( newWanted, newDerived )
 import GHC.Tc.Solver.Monad
   ( TcS
   , zonkCo, zonkTcType
@@ -114,7 +102,6 @@ import GHC.Tc.Types
 import GHC.Tc.Types.Constraint
   ( Ct(..)
   , CtLoc, CtFlavour(..), CtFlavourRole, ShadowInfo(..)
-  , Xi
 #if MIN_VERSION_ghc(9,2,0)
   , CanEqLHS(..)
 #endif
@@ -124,10 +111,7 @@ import GHC.Tc.Types.Constraint
   )
 import GHC.Tc.Types.Evidence
   ( EvTerm(..), Role(..)
-  , evCast
-  , mkTcReflCo, mkTcTransCo, mkTcSymCo
-  , mkTcTyConAppCo
-  , tcDowngradeRole
+  , evCast, mkTcTransCo , mkTcTyConAppCo
   )
 import GHC.Tc.Utils.TcType
   ( TcTyCoVarSet
@@ -140,12 +124,6 @@ import GHC.Tc.Utils.TcType
   , tcTypeKind
   , tyCoVarsOfType
   )
-#if !MIN_VERSION_ghc(9,2,0)
-import GHC.Types.Unique
-  ( Unique )
-#endif
-import GHC.Types.Unique.DFM
-  ( UniqDFM )
 import GHC.Types.Unique.FM
   ( UniqFM, lookupUFM, isNullUFM )
 import GHC.Types.Var
@@ -164,49 +142,18 @@ import GHC.Utils.Misc
 import GHC.Utils.Monad
   ( zipWith3M )
 import GHC.Utils.Outputable
-  ( Outputable(..), SDoc
-  , (<+>), braces, empty, text, vcat
-  )
+  ( Outputable(..), SDoc, empty )
+
+-- ghc-tcplugin-api
+import GHC.TcPlugin.API.Internal.Shim.Reduction
 
 --------------------------------------------------------------------------------
-
--- | A reduction to the provided type, with a coercion witnessing the equality.
-data Reduction =
-  Reduction
-    { reductionCoercion    :: Coercion
-    , reductionReducedType :: !Type
-    }
-instance Outputable Reduction where
-  ppr redn =
-    braces $ vcat
-      [ text "reductionOriginalType:" <+> ppr (reductionOriginalType redn)
-      , text " reductionReducedType:" <+> ppr (reductionReducedType redn)
-      , text "    reductionCoercion:" <+> ppr (reductionCoercion redn)
-      ]
-
-reductionOriginalType :: Reduction -> Type
-reductionOriginalType = coercionRKind . reductionCoercion
--- NB. This is coercionRKind, because in GHC 9.0 & 9.2, the flattener/rewriter
--- uses coercions where the original type is on the right and the rewritten type
--- is on the left.
--- This orientation changes in GHC 9.4, but this module is only present
--- when compiling with GHC 9.0 or GHC 9.2.
-{-# INLINE reductionOriginalType #-}
 
 data RewriteEnv
   = FE { fe_loc     :: !CtLoc
        , fe_flavour :: !CtFlavour
        , fe_eq_rel  :: !EqRel
        }
-
-mkReduction :: ( Coercion, Type ) -> Reduction
-mkReduction ( co, ty ) = Reduction co ty
-
-runReduction1 :: Reduction -> ( Type, Coercion )
-runReduction1 ( Reduction co ty ) = ( ty, co )
-
-runReduction2 :: Reduction -> ( Coercion, Type )
-runReduction2 ( Reduction co ty ) = ( co, ty )
 
 type TcPluginSolveResult = TcPluginResult
 
@@ -260,7 +207,7 @@ reduceCt rws givens ct = do
     rwEnv :: RewriteEnv
     rwEnv = FE ( ctLoc ct ) ( ctFlavour ct ) ( ctEqRel ct )
     shimRewriteEnv :: ShimRewriteEnv
-    shimRewriteEnv = ShimRewriteEnv rws rwEnv ct givens
+    shimRewriteEnv = ShimRewriteEnv rws rwEnv givens
   ( res, newCts ) <- runRewritePluginM shimRewriteEnv ( rewrite_one predTy )
   case res of
     Nothing -> pure ( Nothing, newCts )
@@ -271,7 +218,9 @@ reduceCt rws givens ct = do
         Derived   -> newDerived ( ctLoc ct ) predTy'
       pure ( Just
               ( mkNonCanonical ctEv'
-              , ( evCast ( ctEvExpr ctEv' ) co, ct )
+              , ( evCast ( ctEvExpr ctEv' ) ( mkSymCo co )
+                , ct
+                )
               )
            , newCts
            )
@@ -292,110 +241,120 @@ traverseCts f (a : as) = do
 -- The following is (mostly) copied from GHC 9.4's GHC.Tc.Solver.Rewrite module.
 
 rewrite_one :: Type -> RewriteM Reduction
-rewrite_one = \case
-  ( rewriterView -> Just ty' )
-    -> rewrite_one ty'
-  ty@( LitTy {} )
-    -> do
-      role <- getRole
-      pure $ Reduction ( mkReflCo role ty ) ty
-  TyVarTy tv
-    -> rewriteTyVar tv
-  AppTy ty1 ty2
-    -> rewrite_app_tys ty1 [ty2]
-  TyConApp tc tys
-    | isTypeFamilyTyCon tc
-    -> rewrite_fam_app tc tys
-    | otherwise
-    -> rewrite_ty_con_app tc tys
-  ty@( FunTy { ft_mult = mult, ft_arg = ty1, ft_res = ty2 } )
-    -> do
-      Reduction co1 xi1 <- rewrite_one ty1
-      Reduction co2 xi2 <- rewrite_one ty2
-      Reduction co3 xi3 <- setEqRel NomEq $ rewrite_one mult
-      role <- getRole
-      return $
-       Reduction
-         ( mkFunCo role co3 co1 co2 )
-         ( ty { ft_mult = xi3, ft_arg = xi1, ft_res = xi2 } )
+rewrite_one ty
+  | Just ty' <- rewriterView ty  -- See Note [Rewriting synonyms]
+  = rewrite_one ty'
 
-  ty@( ForAllTy {} )
-    -> do
-      let
-        (bndrs, rho) = tcSplitForAllTyVarBinders ty
-        tvs          = binderVars bndrs
-      Reduction co rho' <- rewrite_one rho
-      pure $ Reduction
-        ( mkHomoForAllCos tvs co )
-        ( mkForAllTys bndrs rho' )
+rewrite_one xi@(LitTy {})
+  = do { role <- getRole
+       ; return $ mkReflRedn role xi }
 
-  CastTy ty g
-    -> do 
-      Reduction co xi <- rewrite_one ty
-      (g', _) <- rewrite_co g
-      role <- getRole
-      pure $ Reduction
-        ( castCoercionKind1 co role xi ty g' )
-        ( mkCastTy xi g' )
+rewrite_one (TyVarTy tv)
+  = rewriteTyVar tv
 
-  CoercionTy co
-    -> do
-      ( co1, co2 ) <- rewrite_co co
-      pure $ Reduction co2 ( mkCoercionTy co1 )
+rewrite_one (AppTy ty1 ty2)
+  = rewrite_app_tys ty1 [ty2]
+
+rewrite_one (TyConApp tc tys)
+  | isTypeFamilyTyCon tc
+  = rewrite_fam_app tc tys
+
+  | otherwise
+  = rewrite_ty_con_app tc tys
+
+rewrite_one (FunTy { ft_af = vis, ft_mult = mult, ft_arg = ty1, ft_res = ty2 })
+  = do { arg_redn <- rewrite_one ty1
+       ; res_redn <- rewrite_one ty2
+       ; w_redn <- setEqRel NomEq $ rewrite_one mult
+       ; role <- getRole
+       ; return $ mkFunRedn role vis w_redn arg_redn res_redn }
+
+rewrite_one ty@(ForAllTy {})
+  = do { let (bndrs, rho) = tcSplitForAllTyVarBinders ty
+       ; redn <- rewrite_one rho
+       ; return $ mkHomoForAllRedn bndrs redn }
+
+rewrite_one (CastTy ty g)
+  = do { redn <- rewrite_one ty
+       ; g'   <- rewrite_co g
+       ; role <- getRole
+       ; return $ mkCastRedn1 role ty g' redn }
+
+rewrite_one (CoercionTy co)
+  = do { co' <- rewrite_co co
+       ; role <- getRole
+       ; return $ mkReflCoRedn role co' }
+
+rewrite_reduction :: Reduction -> RewriteM Reduction
+rewrite_reduction (Reduction co xi) = do
+  redn <- bumpDepth $ rewrite_one xi
+  pure $ co `mkTransRedn` redn
 
 rewrite_app_tys :: Type -> [Type] -> RewriteM Reduction
-rewrite_app_tys ( AppTy ty1 ty2 ) tys =
-  rewrite_app_tys ty1 ( ty2 : tys )
-rewrite_app_tys fun_ty arg_tys = do
-  Reduction fun_co fun_xi <- rewrite_one fun_ty
-  rewrite_app_ty_args fun_xi fun_co arg_tys
+rewrite_app_tys (AppTy ty1 ty2) tys = rewrite_app_tys ty1 (ty2:tys)
+rewrite_app_tys fun_ty arg_tys
+  = do { redn <- rewrite_one fun_ty
+       ; rewrite_app_ty_args redn arg_tys }
 
-rewrite_app_ty_args :: Xi -> Coercion -> [Type] -> RewriteM Reduction
-rewrite_app_ty_args fun_xi fun_co [] = pure $ Reduction fun_co fun_xi
-rewrite_app_ty_args fun_xi fun_co arg_tys = do
-  (xi, co, kind_co) <- case tcSplitTyConApp_maybe fun_xi of
-    Just (tc, xis) -> do
-      let tc_roles  = tyConRolesRepresentational tc
-          arg_roles = dropList xis tc_roles
-      (arg_xis, arg_cos, kind_co)
-        <- rewrite_vector (tcTypeKind fun_xi) arg_roles arg_tys
-      eq_rel <- getEqRel
-      let app_xi = mkTyConApp tc (xis ++ arg_xis)
-          app_co = case eq_rel of
-            NomEq  -> mkAppCos fun_co arg_cos
-            ReprEq -> mkTcTyConAppCo Representational tc
-                        (zipWith mkReflCo tc_roles xis ++ arg_cos)
-                      `mkTcTransCo`
-                      mkAppCos fun_co (map mkNomReflCo arg_tys)
-      return (app_xi, app_co, kind_co)
-    Nothing -> do
-      (arg_xis, arg_cos, kind_co)
-        <- rewrite_vector (tcTypeKind fun_xi) (repeat Nominal) arg_tys
-      let arg_xi = mkAppTys fun_xi arg_xis
-          arg_co = mkAppCos fun_co arg_cos
-      return (arg_xi, arg_co, kind_co)
-  role <- getRole
-  return (homogenise_result xi co role kind_co)
+rewrite_app_ty_args :: Reduction -> [Type] -> RewriteM Reduction
+rewrite_app_ty_args redn []
+  = return redn
+rewrite_app_ty_args fun_redn@(Reduction fun_co fun_xi) arg_tys
+  = do { het_redn <- case tcSplitTyConApp_maybe fun_xi of
+           Just (tc, xis) ->
+             do { let tc_roles  = tyConRolesRepresentational tc
+                      arg_roles = dropList xis tc_roles
+                ; ArgsReductions (Reductions arg_cos arg_xis) kind_co
+                    <- rewrite_vector (tcTypeKind fun_xi) arg_roles arg_tys
+
+                ; eq_rel <- getEqRel
+                ; let app_xi = mkTyConApp tc (xis ++ arg_xis)
+                      app_co = case eq_rel of
+                        NomEq  -> mkAppCos fun_co arg_cos
+                        ReprEq -> mkAppCos fun_co (map mkNomReflCo arg_tys)
+                                  `mkTcTransCo`
+                                  mkTcTyConAppCo Representational tc
+                                    (zipWith mkReflCo tc_roles xis ++ arg_cos)
+
+                ; return $
+                    mkHetReduction
+                      (mkReduction app_co app_xi )
+                      kind_co }
+           Nothing ->
+             do { ArgsReductions redns kind_co
+                    <- rewrite_vector (tcTypeKind fun_xi) (repeat Nominal) arg_tys
+                ; return $ mkHetReduction (mkAppRedns fun_redn redns) kind_co }
+
+       ; role <- getRole
+       ; return (homogeniseHetRedn role het_redn) }
 
 {-# INLINE rewrite_args_tc #-}
-rewrite_args_tc :: TyCon -> Maybe [Role] -> [Type] -> RewriteM ( [Xi], [Coercion] , MCoercionN)
+rewrite_args_tc :: TyCon -> Maybe [Role] -> [Type] -> RewriteM ArgsReductions
 rewrite_args_tc tc = rewrite_args all_bndrs any_named_bndrs inner_ki emptyVarSet
+  -- NB: TyCon kinds are always closed
   where
+  -- There are many bang patterns in here. It's been observed that they
+  -- greatly improve performance of an optimized build.
+  -- The T9872 test cases are good witnesses of this fact.
+
     (bndrs, named)
       = ty_con_binders_ty_binders' (tyConBinders tc)
+    -- it's possible that the result kind has arrows (for, e.g., a type family)
+    -- so we must split it
     (inner_bndrs, inner_ki, inner_named) = split_pi_tys' (tyConResKind tc)
     !all_bndrs                           = bndrs `chkAppend` inner_bndrs
     !any_named_bndrs                     = named || inner_named
+    -- NB: Those bangs there drop allocations in T9872{a,c,d} by 8%.
 
 rewrite_fam_app :: TyCon -> [Type] -> RewriteM Reduction
 rewrite_fam_app tc tys = do
   let (tys1, tys_rest) = splitAt (tyConArity tc) tys
-  Reduction co1 xi1 <- rewrite_exact_fam_app tc tys1
-  rewrite_app_ty_args xi1 co1 tys_rest
+  redn <- rewrite_exact_fam_app tc tys1
+  rewrite_app_ty_args redn tys_rest
 
 rewrite_exact_fam_app :: TyCon -> [Type] -> RewriteM Reduction
 rewrite_exact_fam_app tc tys = do
-  checkStackDepth (mkTyConApp tc tys)
+  checkStackDepth $ mkTyConApp tc tys
   rws <- getRewriters
   let
     mbRewriter :: Maybe Rewriter
@@ -405,45 +364,51 @@ rewrite_exact_fam_app tc tys = do
     Just redn -> finish False redn
     _ -> do
       eq_rel <- getEqRel
-      (xis, coercions, kind_co) <-
+      ArgsReductions (Reductions cos xis) kind_co <-
         if eq_rel == NomEq
         then rewrite_args_tc tc Nothing tys
         else setEqRel NomEq $
              rewrite_args_tc tc Nothing tys
-      let role    = eqRelRole eq_rel
-          args_co = mkTyConAppCo role tc coercions
-          homogenise :: Reduction -> Reduction
-          homogenise (Reduction co xi) =
-            homogenise_result xi (co `mkTcTransCo` args_co) role kind_co
-          giveUp :: Reduction
-          giveUp = homogenise $ Reduction (mkTcReflCo role reduced) reduced
-             where reduced = mkTyConApp tc xis
+      let
+        role    = eqRelRole eq_rel
+        args_co = mkTyConAppCo role tc cos
+        homogenise :: Reduction -> Reduction
+        homogenise redn
+          = homogeniseHetRedn role
+          $ mkHetReduction
+              (args_co `mkTransRedn` redn)
+              kind_co
+        give_up :: Reduction
+        give_up = homogenise $ mkReflRedn role (mkTyConApp tc xis)
+
       result2 <- liftTcS $ lookupFamAppInert tc xis
       flavour <- getFlavour
       case result2 of
         Just (co, xi, fr@(_, inert_eq_rel))
           | fr `eqCanRewriteFR` (flavour, eq_rel)
-          -> finish True (homogenise $ Reduction downgraded_co xi)
+          , let
+              redn :: Reduction
+              redn = Reduction (mkSymCo co) xi -- inerts use a different orientation in GHC 9.0 and 9.2
+          -> finish True (homogenise $ downgradeRedn role' inert_role redn)
           where
-            inert_role    = eqRelRole inert_eq_rel
-            role'         = eqRelRole eq_rel
-            downgraded_co = tcDowngradeRole role' inert_role (mkTcSymCo co)
+            inert_role      = eqRelRole inert_eq_rel
+            role'           = eqRelRole eq_rel
         _ -> do
           result3 <- try_to_reduce tc xis mbRewriter
           case result3 of
             Just redn -> finish True (homogenise redn)
-            _         -> return giveUp
+            _         -> return give_up
   where
     finish :: Bool -> Reduction -> RewriteM Reduction
     finish use_cache (Reduction co xi) = do
       Reduction fully_co fully <- bumpDepth $ rewrite_one xi
-      let final_redn = Reduction (fully_co `mkTcTransCo` co) fully
+      let final_redn@(Reduction final_co final_xi) = Reduction (fully_co `mkTcTransCo` co) fully
       eq_rel <- getEqRel
       flavour <- getFlavour
       when (use_cache && eq_rel == NomEq && flavour /= Derived) $
         liftTcS $
           extendFamAppCache tc tys
-            ( runReduction2 final_redn )
+            ( mkSymCo final_co, final_xi ) -- different orientation in GHC 9.0 and 9.2
 #if !MIN_VERSION_ghc(9,2,0)
             flavour
 #endif
@@ -497,21 +462,19 @@ runTcPluginRewriter mbRewriter tys =
           -> addRewriting Nothing []
 
 rewrite_ty_con_app :: TyCon -> [Type] -> RewriteM Reduction
-rewrite_ty_con_app tc tys = do
-  role <- getRole
-  let m_roles | Nominal <- role = Nothing
-              | otherwise       = Just $ tyConRolesX role tc
-  (xis, coercions, kind_co) <- rewrite_args_tc tc m_roles tys
-  let tyconapp_xi = mkTyConApp tc xis
-      tyconapp_co = mkTyConAppCo role tc coercions
-  return (homogenise_result tyconapp_xi tyconapp_co role kind_co)
+rewrite_ty_con_app tc tys
+  = do { role <- getRole
+       ; let m_roles | Nominal <- role = Nothing
+                     | otherwise       = Just $ tyConRolesX role tc
+       ; ArgsReductions redns kind_co <- rewrite_args_tc tc m_roles tys
+       ; let tyconapp_redn
+                = mkHetReduction
+                    (mkTyConAppRedn role tc redns)
+                    kind_co
+       ; return $ homogeniseHetRedn role tyconapp_redn }
 
-rewrite_co :: Coercion -> RewriteM ( Coercion, Coercion )
-rewrite_co co = do
-  zonked_co <- liftTcS $ zonkCo co
-  env_role <- getRole
-  let co' = mkTcReflCo env_role ( mkCoercionTy zonked_co )
-  pure ( zonked_co, co' )
+rewrite_co :: Coercion -> RewriteM Coercion
+rewrite_co co = liftTcS $ zonkCo co
 
 rewriterView :: Type -> Maybe Type
 rewriterView ty@(TyConApp tc _)
@@ -526,18 +489,16 @@ rewriteTyVar :: TyVar -> RewriteM Reduction
 rewriteTyVar tv = do
   mb_yes <- rewrite_tyvar1 tv
   case mb_yes of
-    RTRFollowed ty1 co1 -> do
-      Reduction co2 ty2 <- rewrite_one ty1
-      pure $ Reduction (co2 `mkTransCo` co1) ty2
+    RTRFollowed redn -> rewrite_reduction redn
     RTRNotFollowed -> do
       tv' <- liftTcS $ updateTyVarKindM zonkTcType tv
       role <- getRole
       let ty' = mkTyVarTy tv'
-      return $ Reduction (mkTcReflCo role ty') ty'
+      pure $ mkReflRedn role ty'
 
 data RewriteTvResult
   = RTRNotFollowed
-  | RTRFollowed Type Coercion
+  | RTRFollowed !Reduction
 
 rewrite_tyvar1 :: TcTyVar -> RewriteM RewriteTvResult
 rewrite_tyvar1 tv = do
@@ -545,7 +506,7 @@ rewrite_tyvar1 tv = do
   case mb_ty of
     Just ty -> do
       role <- getRole
-      return (RTRFollowed ty (mkReflCo role ty))
+      return $ RTRFollowed $ mkReflRedn role ty
     Nothing -> do
       fr <- getFlavourRole
       rewrite_tyvar2 tv fr
@@ -565,49 +526,29 @@ rewrite_tyvar2 tv fr@(_, eq_rel) = do
 #endif
       , let ct_fr = (ctEvFlavour ctev, ct_eq_rel)
       , ct_fr `eqCanRewriteFR` fr
-      -> do 
-        let rewrite_co1 = mkSymCo (ctEvCoercion ctev)
-            rewrite_co2 = case (ct_eq_rel, eq_rel) of
-              (ReprEq, _rel)  -> rewrite_co1
-              (NomEq, NomEq)  -> rewrite_co1
-              (NomEq, ReprEq) -> mkSubCo rewrite_co1
-        return (RTRFollowed rhs_ty rewrite_co2)
+      -> do
+          let rewriting_co1 = ctEvCoercion ctev
+              rewriting_co  = case (ct_eq_rel, eq_rel) of
+                (ReprEq, _rel)  -> rewriting_co1
+                (NomEq, NomEq)  -> rewriting_co1
+                (NomEq, ReprEq) -> mkSubCo rewriting_co1
+          return $ RTRFollowed $ mkReduction rewriting_co rhs_ty 
     _other -> return RTRNotFollowed
 
 rewrite_vector :: Kind
                -> [Role]
                -> [Type]
-               -> RewriteM ([Xi], [Coercion], MCoercionN)
-rewrite_vector ki roles tys = do
-  eq_rel <- getEqRel
-  case eq_rel of
-    NomEq ->
-      rewrite_args bndrs
-        any_named_bndrs
-        inner_ki
-        fvs
-        Nothing
-        tys
-    ReprEq ->
-      rewrite_args bndrs
-        any_named_bndrs
-        inner_ki
-        fvs
-        (Just roles)
-        tys
+               -> RewriteM ArgsReductions
+rewrite_vector ki roles tys
+  = do { eq_rel <- getEqRel
+       ; let mb_roles = case eq_rel of { NomEq -> Nothing; ReprEq -> Just roles }
+       ; rewrite_args bndrs any_named_bndrs inner_ki fvs mb_roles tys
+       }
   where
     (bndrs, inner_ki, any_named_bndrs) = split_pi_tys' ki
     fvs                                = tyCoVarsOfType ki
 {-# INLINE rewrite_vector #-}
 
-homogenise_result :: Xi
-                  -> Coercion
-                  -> Role
-                  -> MCoercionN
-                  -> Reduction
-homogenise_result xi co _ MRefl = Reduction co xi
-homogenise_result xi co r mco@(MCo kind_co)
-  = Reduction ((mkSymCo $ GRefl r xi mco) `mkTransCo` co) (xi `mkCastTy` kind_co)
 split_pi_tys' :: Type -> ([TyCoBinder], Type, Bool)
 split_pi_tys' ty = split ty ty
   where
@@ -631,10 +572,11 @@ ty_con_binders_ty_binders' = foldr go ([], False)
     {-# INLINE go #-}
 {-# INLINE ty_con_binders_ty_binders' #-}
 
+{-# INLINE rewrite_args #-}
 rewrite_args :: [TyCoBinder] -> Bool
              -> Kind -> TcTyCoVarSet
              -> Maybe [Role] -> [Type]
-             -> RewriteM ([Xi], [Coercion], MCoercionN)
+             -> RewriteM ArgsReductions
 rewrite_args orig_binders
              any_named_bndrs
              orig_inner_ki
@@ -647,41 +589,37 @@ rewrite_args orig_binders
         where orig_roles = fromMaybe (repeat Nominal) orig_m_roles
 
 {-# INLINE rewrite_args_fast #-}
-rewrite_args_fast :: [Type]
-                  -> RewriteM ([Xi], [Coercion], MCoercionN)
+rewrite_args_fast :: [Type] -> RewriteM ArgsReductions
 rewrite_args_fast orig_tys
-  = fmap finish (iterateRewrite orig_tys)
+  = fmap finish (iterate orig_tys)
   where
 
-    iterateRewrite :: [Type] -> RewriteM ([Xi], [Coercion])
-    iterateRewrite (ty:tys) = do
-      Reduction co xi <- rewrite_one ty
-      (xis, coercions) <- iterateRewrite tys
-      pure (xi : xis, co : coercions)
-    iterateRewrite [] = pure ([], [])
+    iterate :: [Type] -> RewriteM Reductions
+    iterate (ty : tys) = do
+      Reduction  co  xi  <- rewrite_one ty
+      Reductions cos xis <- iterate tys
+      pure $ Reductions (co : cos) (xi : xis)
+    iterate [] = pure $ Reductions [] []
 
     {-# INLINE finish #-}
-    finish :: ([Xi], [Coercion]) -> ([Xi], [Coercion], MCoercionN)
-    finish (xis, coercions) = (xis, coercions, MRefl)
+    finish :: Reductions -> ArgsReductions
+    finish redns = ArgsReductions redns MRefl
 
 {-# INLINE rewrite_args_slow #-}
 rewrite_args_slow :: [TyCoBinder] -> Kind -> TcTyCoVarSet
                   -> [Role] -> [Type]
-                  -> RewriteM ([Xi], [Coercion], MCoercionN)
-rewrite_args_slow binders inner_ki fvs roles tys = do
-  rewritten_args <-
-    zipWith3M fl (map isNamedBinder binders ++ repeat True)
-      roles tys
-  pure
-#if !MIN_VERSION_ghc(9,2,0)
-    $ ( \ ( xs, cs, c ) -> ( xs, cs, coToMCo c ) )
-#endif
-    $ simplifyArgsWorker binders inner_ki fvs roles rewritten_args
+                  -> RewriteM ArgsReductions
+rewrite_args_slow binders inner_ki fvs roles tys
+  = do { rewritten_args <- zipWith3M fl (map isNamedBinder binders ++ repeat True)
+                                        roles tys
+       ; return $ simplifyArgsWorker binders inner_ki fvs roles rewritten_args }
   where
     {-# INLINE fl #-}
-    fl :: Bool -> Role -> Type -> RewriteM ( Type, Coercion )
-    fl True  r ty = noBogusCoercions $ runReduction1 <$> fl1 r ty
-    fl False r ty =                    runReduction1 <$> fl1 r ty
+    fl :: Bool   -- must we ensure to produce a real coercion here?
+                 -- see comment at top of function
+       -> Role -> Type -> RewriteM Reduction
+    fl True  r ty = noBogusCoercions $ fl1 r ty
+    fl False r ty =                    fl1 r ty
 
     {-# INLINE fl1 #-}
     fl1 :: Role -> Type -> RewriteM Reduction
@@ -695,7 +633,7 @@ rewrite_args_slow binders inner_ki fvs roles tys = do
 
     fl1 Phantom ty
       = do { ty' <- liftTcS $ zonkTcType ty
-           ; pure $ Reduction ( mkReflCo Phantom ty' ) ty' }
+           ; return $ mkReflRedn Phantom ty' }
 
 noBogusCoercions :: RewriteM a -> RewriteM a
 noBogusCoercions thing_inside
@@ -728,20 +666,10 @@ data RewriteState =
    , reductionOccurred :: !ReduceQ
    }
 
-type RewrittenTyFamApps =
-  UniqDFM
-#if MIN_VERSION_ghc(9,2,0)
-    TyCon
-#else
-    Unique
-#endif
-    ( ListMap LooseTypeMap ( Maybe Reduction, [Ct] ) )
-
 data ShimRewriteEnv
   = ShimRewriteEnv
   { rewriters     :: !Rewriters
   , rewriteEnv    :: !RewriteEnv
-  , rewriteCt     :: !Ct
   , rewriteGivens :: ![ Ct ]
   }
 
@@ -763,19 +691,15 @@ runRewritePluginM :: ShimRewriteEnv
 runRewritePluginM env ( RewriteM { runRewriteM = run } ) = do
 
   evBindsVar <- getEvBindsTcPluginM
-  ( a, RewriteState newCts didReduce )
+  ( a, RewriteState { rewrittenCts, reductionOccurred } )
     <- unsafeTcPluginTcM
      $ runTcSWithEvBinds evBindsVar
      $ run env ( RewriteState [] NoReduction )
   let
-    mb_a = case didReduce of
+    mb_a = case reductionOccurred of
       NoReduction -> Nothing
       DidReduce   -> Just a
-  pure ( mb_a, newCts )
-
-setDidReduce :: RewriteM ()
-setDidReduce = RewriteM \ _env ( RewriteState cts _ ) ->
-  pure ( (), RewriteState cts DidReduce )
+  pure ( mb_a, rewrittenCts )
 
 addRewriting :: Maybe Reduction -> [Ct] -> RewriteM ( Maybe Reduction )
 addRewriting mbRedn newCts = RewriteM \ _ ( RewriteState cts s ) ->
@@ -788,18 +712,8 @@ addRewriting mbRedn newCts = RewriteM \ _ ( RewriteState cts s ) ->
       = s
   in pure ( mbRedn , RewriteState ( cts <> newCts ) s' )
 
--- Silly workaround because wrapTcS is not exported in GHC 9.0
-liftIOTcS :: IO a -> TcS a
-liftIOTcS = runTcPluginTcS . tcPluginIO
-
 getRewriters :: RewriteM Rewriters
 getRewriters = RewriteM \ env s -> pure ( rewriters env, s )
-
-getGivens :: RewriteM [Ct]
-getGivens = RewriteM \ env s -> pure ( rewriteGivens env, s )
-
-getRewriteCt :: RewriteM Ct
-getRewriteCt = RewriteM \ env s -> pure ( rewriteCt env, s )
 
 getRewriteEnvField :: (RewriteEnv -> a) -> RewriteM a
 getRewriteEnvField accessor = RewriteM \ env s ->

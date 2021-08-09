@@ -1,4 +1,10 @@
 
+# Version 0.3.1.0 (2021-08-09)
+
+Ensure that the coercions stored in `Reduction`s are always
+oriented left-to-right, by making the internal rewriting compatibility layer
+also use left-to-right coercions.
+
 # Version 0.3.0.0 (2021-08-04)
 
 Account for changes in rewriting in GHC 9.4:

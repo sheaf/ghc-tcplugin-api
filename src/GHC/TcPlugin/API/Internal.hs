@@ -59,10 +59,6 @@ module GHC.TcPlugin.API.Internal
   where
 
 -- base
-#ifndef HAS_REWRITING
-import Data.IORef
-  ( IORef, newIORef )
-#endif
 import Data.Kind
   ( Constraint, Type )
 import GHC.TypeLits
@@ -101,11 +97,7 @@ import qualified GHC.Data.FastString
     ( fsLit )
 import qualified GHC.Tc.Plugin
   as GHC
-    ( tcLookupDataCon, tcLookupTyCon
-#ifndef HAS_REWRITING
-    , tcPluginIO
-#endif
-    )
+    ( tcLookupDataCon, tcLookupTyCon )
 import qualified GHC.Tc.Types
   as GHC
     ( TcM, TcPlugin(..), TcPluginM
@@ -133,17 +125,12 @@ import qualified GHC.Tc.Types.Evidence
 import qualified GHC.Types.Unique.FM
   as GHC
     ( UniqFM )
-#ifndef HAS_REWRITING
-import qualified GHC.Types.Unique.DFM
-  as GHC
-    ( emptyUDFM )
-#endif
 
 -- ghc-tcplugin-api
 #ifndef HAS_REWRITING
 import GHC.TcPlugin.API.Internal.Shim
   ( TcPluginSolveResult, TcPluginRewriteResult(..)
-  , RewrittenTyFamApps, RewriteEnv
+  , RewriteEnv
   , shimRewriter
   )
 #endif
@@ -169,7 +156,7 @@ type TcPluginSolver
 
 -- | For rewriting type family applications, a type-checking plugin provides
 -- a function of this type for each type family 'GHC.Core.TyCon.TyCon'.
--- 
+--
 -- The function is provided with the current set of Given constraints, together
 -- with the arguments to the type family.
 -- The type family application will always be fully saturated.
@@ -544,9 +531,6 @@ data BuiltinDefs =
     , showTypeTyCon  :: !GHC.TyCon
     , concatTyCon    :: !GHC.TyCon
     , vcatTyCon      :: !GHC.TyCon
-#ifndef HAS_REWRITING
-    , rewrittenTyFamsIORef :: !( IORef RewrittenTyFamApps )
-#endif
     }
 
 data TcPluginDefs s
@@ -562,9 +546,6 @@ initBuiltinDefs = do
   showTypeTyCon   <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorShowTypeDataConName
   concatTyCon     <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorAppendDataConName
   vcatTyCon       <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorVAppendDataConName
-#ifndef HAS_REWRITING
-  rewrittenTyFamsIORef <- GHC.tcPluginIO $ newIORef GHC.emptyUDFM
-#endif
   pure ( BuiltinDefs { .. } )
 
 interpretErrorMessage :: BuiltinDefs -> TcPluginErrorMessage -> GHC.PredType
