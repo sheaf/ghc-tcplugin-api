@@ -42,7 +42,7 @@ data Context kϕ where
   (:&)       :: Context kϕ -> Type kϕ k -> Context kϕ
 
 -- | Extend a context by a kind.
-type (:*&) :: forall {kϕ :: KContext}. Context kϕ -> forall (k :: Kind) -> Context (kϕ :&* k)
+type (:*&) :: forall (kϕ :: KContext). Context kϕ -> forall (k :: Kind) -> Context (kϕ :&* k)
 type ϕ :*& k = KExtendCtx @k ϕ
 
 -- | Term-level de Bruijn index.

@@ -40,13 +40,13 @@ shiftCons :: Proxy s -> Proxy a -> Proxy b
 shiftCons _ _ _ x = x
 
 shiftLift1 :: Proxy s -> Proxy l -> Proxy a
-           -> Proxy ( ApplySub ( KUnder s :.: KBind @l ) a )
-           -> Proxy ( ApplySub ( KBind @l :.: s ) a )
+           -> Proxy ( ApplySub ( KUnder s :.: KBind @_ @l ) a )
+           -> Proxy ( ApplySub ( KBind @_ @l :.: s ) a )
 shiftLift1 _ _ _ x = x
 
 shiftLift2 :: Proxy t -> Proxy s -> Proxy l -> Proxy a
-           -> Proxy ( ApplySub ( ( t :.: KUnder s ) :.: KBind @l ) a )
-           -> Proxy ( ApplySub ( ( t :.: KBind @l ) :.: s ) a )
+           -> Proxy ( ApplySub ( ( t :.: KUnder s ) :.: KBind @_ @l ) a )
+           -> Proxy ( ApplySub ( ( t :.: KBind @_ @l ) :.: s ) a )
 shiftLift2 _ _ _ _ x = x
 
 lift1 :: Proxy t -> Proxy s -> Proxy a

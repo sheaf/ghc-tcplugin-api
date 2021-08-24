@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE CPP #-}
 
 module GHC.TcPlugin.API.Internal.Shim.Reduction where
 
@@ -12,8 +13,13 @@ import GHC.Core.Class
 import GHC.Core.Coercion
   ( Coercion, CoercionN, MCoercion(..)
   , Role(Nominal), LiftingContext
+#if MIN_VERSION_ghc(9,0,0)
   , castCoercionKind1, castCoercionKind2
-  , coercionLKind, coercionRKind, coercionKind
+  , coercionLKind, coercionRKind
+#else
+  , mkCoherenceLeftCo, mkNomReflCo
+#endif
+  , coercionKind
   , coToMCo
   , decomposePiCos, downgradeRole
   , liftCoSubst, emptyLiftingContext, extendLiftingContextAndInScope, zapLiftingContext
@@ -27,7 +33,11 @@ import GHC.Core.Coercion
 import GHC.Core.Predicate
   ( mkClassPred )
 import GHC.Core.TyCo.Rep
-  ( TyCoBinder, mkFunTy )
+  ( TyCoBinder, mkFunTy
+#if !MIN_VERSION_ghc(9,0,0)
+  , Coercion(..)
+#endif
+  )
 import GHC.Core.TyCon
   ( TyCon )
 import GHC.Core.Type
@@ -314,17 +324,35 @@ mkAppRedn (Reduction co1 ty1) (Reduction co2 ty2)
 -- Combines 'mkFunCo' and 'mkFunTy'.
 mkFunRedn :: Role
           -> AnonArgFlag
+#if MIN_VERSION_ghc(9,0,0)
           -> ReductionN -- ^ multiplicity reduction
+#endif
           -> Reduction  -- ^ argument reduction
           -> Reduction  -- ^ result reduction
           -> Reduction
 mkFunRedn r vis
+#if MIN_VERSION_ghc(9,0,0)
   (Reduction w_co w_ty)
+#endif
   (Reduction arg_co arg_ty)
   (Reduction res_co res_ty)
     = mkReduction
-        (mkFunCo r w_co arg_co res_co)
-        (mkFunTy vis w_ty arg_ty res_ty)
+        ( mkFunCo
+            r
+#if MIN_VERSION_ghc(9,0,0)
+            w_co
+#endif
+            arg_co
+            res_co
+        )
+        ( mkFunTy
+            vis
+#if MIN_VERSION_ghc(9,0,0)
+            w_ty
+#endif
+            arg_ty
+            res_ty
+        )
 {-# INLINE mkFunRedn #-}
 
 -- | Create a 'Reduction' associated to a Π type,
@@ -516,3 +544,39 @@ mkCoherenceRightMCo r ty (MCo co) co2 = mkCoherenceRightCo r ty co co2
 mkTransMCoR :: Coercion -> MCoercion -> MCoercion
 mkTransMCoR co1 MRefl     = coToMCo co1
 mkTransMCoR co1 (MCo co2) = MCo (mkTransCo co1 co2)
+
+--------------------------------------------------------------------------------
+
+#if !MIN_VERSION_ghc(9,0,0)
+
+coercionLKind, coercionRKind :: Coercion -> Type
+coercionLKind co = case coercionKind co of { Pair lco _ -> lco }
+coercionRKind co = case coercionKind co of { Pair _ rco -> rco }
+
+-- | Creates a new coercion with both of its types casted by different casts
+-- @castCoercionKind2 g r t1 t2 h1 h2@, where @g :: t1 ~r t2@,
+-- has type @(t1 |> h1) ~r (t2 |> h2)@.
+-- @h1@ and @h2@ must be nominal.
+castCoercionKind2 :: Coercion -> Role -> Type -> Type
+                 -> CoercionN -> CoercionN -> Coercion
+castCoercionKind2 g r t1 t2 h1 h2
+  = mkCoherenceRightCo r t2 h2 (mkCoherenceLeftCo r t1 h1 g)
+
+-- | @castCoercionKind1 g r t1 t2 h@ = @coercionKind g r t1 t2 h h@
+-- That is, it's a specialised form of castCoercionKind, where the two
+--          kind coercions are identical
+-- @castCoercionKind1 g r t1 t2 h@, where @g :: t1 ~r t2@,
+-- has type @(t1 |> h) ~r (t2 |> h)@.
+-- @h@ must be nominal.
+-- See Note [castCoercionKind1]
+castCoercionKind1 :: Coercion -> Role -> Type -> Type
+                  -> CoercionN -> Coercion
+castCoercionKind1 g r t1 t2 h
+  = case g of
+      Refl {} -> mkNomReflCo (mkCastTy t2 h)
+      GRefl _ _ mco -> case mco of
+           MRefl       -> mkReflCo r (mkCastTy t2 h)
+           MCo kind_co -> GRefl r (mkCastTy t1 h) $
+                          MCo (mkSymCo h `mkTransCo` kind_co `mkTransCo` h)
+      _ -> castCoercionKind2 g r t1 t2 h h
+#endif

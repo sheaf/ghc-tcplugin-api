@@ -3,7 +3,7 @@
 # ghc-tcplugin-api <a href="https://hackage.haskell.org/package/ghc-tcplugin-api" alt="Hackage"><img src="https://img.shields.io/hackage/v/ghc-tcplugin-api.svg" /></a>
 
 This library provides a convenient and cross-compatible interface for authors
-of GHC type-checking plugins (starting from GHC 9.0).    
+of GHC type-checking plugins (starting from GHC 8.10).    
 
 Different stages of a type-checking plugin (initialisation, solving, rewriting, shutdown) are given
 different monads to operate within. This ensures operations that only make sense in one context
@@ -34,12 +34,13 @@ usecase using this library's interface. This can be particularly useful when usi
 
 ## Compatibility
 
-This library provides a unified interface that works across different GHC versions (starting from GHC 9.0),
+This library provides a unified interface that works across different GHC versions (starting from GHC 8.10),
 aiming to reduce the CPP burden imposed on authors of type-checking plugins.    
 
 We make use of GHC's new API for rewriting type-families in typechecker plugins,
 which is scheduled to land in GHC 9.4.    
-A compatibility layer is provided, which retro-fits the rewriting functionality onto GHC 9.0 and 9.2.    
+A compatibility layer is provided, which retro-fits the rewriting functionality onto
+previous versions of GHC.
 
 ## Documentation
 

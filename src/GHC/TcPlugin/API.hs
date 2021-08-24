@@ -3,7 +3,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternSynonyms #-}
-{-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE UndecidableInstances #-}
 
 {-|
@@ -361,14 +360,18 @@ module GHC.TcPlugin.API
 
     -- ** Function types
 
-  , AnonArgFlag(..), Mult
+  , AnonArgFlag(..)
   , mkFunTy, mkVisFunTy, mkInvisFunTy, mkVisFunTys
-  , mkForAllTy, mkForAllTys, mkInvisForAllTys
+  , mkForAllTy, mkForAllTys
   , mkPiTy, mkPiTys
+
+#if MIN_VERSION_ghc(9,0,0)
+  , Mult
   , mkFunTyMany
   , mkScaledFunTy
   , mkVisFunTyMany, mkVisFunTysMany
   , mkInvisFunTyMany, mkInvisFunTysMany
+#endif
 
     -- ** Zonking
 
@@ -415,9 +418,6 @@ module GHC.TcPlugin.API
   , Pred(..), EqRel(..), FunDep, CtFlavour
   , Ct, CtLoc, CtEvidence, CtOrigin
   , QCInst
-#if MIN_VERSION_ghc(9,2,0)
-  , CanEqLHS
-#endif
   , Type, PredType
   , InstEnvs, TcLevel
 
@@ -472,15 +472,18 @@ import GHC.Core.TyCo.Rep
   ( Type, PredType, Kind
   , Coercion(..), CoercionHole(..)
   , UnivCoProvenance(..)
-  , AnonArgFlag(..), Mult
+  , AnonArgFlag(..)
   , mkTyVarTy, mkTyVarTys
   , mkFunTy, mkVisFunTy, mkInvisFunTy, mkVisFunTys
-  , mkForAllTy, mkForAllTys, mkInvisForAllTys
+  , mkForAllTy, mkForAllTys
   , mkPiTy, mkPiTys
+#if MIN_VERSION_ghc(9,0,0)
+  , Mult
   , mkFunTyMany
   , mkScaledFunTy
   , mkVisFunTyMany, mkVisFunTysMany
   , mkInvisFunTyMany, mkInvisFunTysMany
+#endif
   )
 import GHC.Core.Type
   ( eqType, mkTyConTy, mkTyConApp, splitTyConApp_maybe
@@ -496,16 +499,11 @@ import GHC.Tc.Types
 #if HAS_REWRITING
   , TcPluginSolveResult(..), TcPluginRewriteResult(..)
   , RewriteEnv(..)
-#else
-  , TcPluginResult(..)
 #endif
   )
 import GHC.Tc.Types.Constraint
   ( Ct(..), CtLoc(..), CtEvidence(..), CtFlavour(..)
   , QCInst(..)
-#if MIN_VERSION_ghc(9,2,0)
-  , CanEqLHS(..)
-#endif
   , ctPred, ctLoc, ctEvidence, ctEvExpr
   , ctFlavour, ctEqRel, ctOrigin
   , bumpCtLocDepth
@@ -530,8 +528,15 @@ import GHC.Types.Name.Occurrence
   )
 import GHC.Types.Unique
   ( Unique )
-import GHC.Types.Unique.FM
+#if MIN_VERSION_ghc(9,0,0)
+import GHC.Types.Unique.FM as UniqFM
   ( UniqFM, emptyUFM, listToUFM )
+#else
+import qualified GHC.Types.Unique.FM as GHC
+  ( UniqFM )
+import GHC.Types.Unique.FM as UniqFM
+  ( emptyUFM, listToUFM )
+#endif
 import GHC.Types.Unique.DFM
   ( UniqDFM, lookupUDFM, lookupUDFM_Directly, elemUDFM )
 import GHC.Types.Var
@@ -801,3 +806,11 @@ mkTyFamAppReduction
   -> Reduction
 mkTyFamAppReduction str role tc args ty =
   Reduction ( mkPluginUnivCo str role ( mkTyConApp tc args ) ty ) ty
+
+--------------------------------------------------------------------------------
+
+#if !MIN_VERSION_ghc(9,0,0)
+
+type UniqFM ty a = GHC.UniqFM a
+
+#endif

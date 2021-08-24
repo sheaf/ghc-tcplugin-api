@@ -67,13 +67,13 @@ data KSub kϕ kψ where
   -- | Identity.
   KId     :: KSub kϕ kϕ
   -- | Bind a new variable at the top-level, increasing all other de Bruijn indices.
-  KBind   :: forall {kϕ} l. KSub kϕ (kϕ :&* l)
+  KBind   :: forall kϕ l. KSub kϕ (kϕ :&* l)
   -- | Rename when going under an existing binder: don't touch that de Bruijn index!
-  KUnder  :: forall {kϕ} {kψ} k. KSub kϕ kψ -> KSub (kϕ :&* k) (kψ :&* k)
+  KUnder  :: forall kϕ kψ k. KSub kϕ kψ -> KSub (kϕ :&* k) (kψ :&* k)
   -- | Extend a substitution with a given type.
   KExtend :: KSub kϕ kψ -> Type kψ k -> KSub (kϕ :&* k) kψ
   -- | Compose two renamings.
-  (:.:)   :: forall {kϕ} {kψ} {kξ}. KSub kψ kξ -> KSub kϕ kψ -> KSub kϕ kξ
+  (:.:)   :: forall kϕ kψ kξ. KSub kψ kξ -> KSub kϕ kψ -> KSub kϕ kξ
 
 -- | Apply a renaming/substitution to a type variable.
 type SubVar :: KSub kϕ kψ -> KIdx kϕ k -> Type kψ k
@@ -102,7 +102,7 @@ type family ApplySub s ty where
   ApplySub s (Forall ty) = Forall ( ApplySub ( KUnder s ) ty ) -- (Lambda)
 
 -- | Rename when going under a forall.
-type Weaken :: forall {kϕ} {k} l. Type kϕ k -> Type (kϕ :&* l) k
+type Weaken :: Type kϕ k -> Type (kϕ :&* l) k
 type Weaken ty = ApplySub KBind ty
 
 -- | Substitute a single type.
@@ -135,7 +135,7 @@ subVarSing (t :%.: SKUnder s)   (SKS i) = subVarSing (t :%.: SKBind :%.: s) i
 subVarSing (t :%.: (SKExtend s a)) i    = subVarSing ( SKExtend ( t :%.: s ) ( applySubSing t a )) i
 subVarSing (t :%.: ( s :%.: r )) i      = subVarSing ( ( t :%.: s) :%.: r ) i
 
-weakenSing :: Sing a -> Sing (Weaken @l a)
+weakenSing :: Sing a -> Sing (Weaken a)
 weakenSing = applySubSing SKBind
 
 --------------------------------------------------------------------------------

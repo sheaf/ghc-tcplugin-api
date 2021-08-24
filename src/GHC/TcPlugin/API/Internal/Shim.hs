@@ -18,7 +18,7 @@ in typechecking plugins on GHC 9.0 and 9.2.
 
 module GHC.TcPlugin.API.Internal.Shim
   ( Reduction(..), mkReduction
-  , TcPluginSolveResult, TcPluginRewriteResult(..)
+  , TcPluginSolveResult(TcPluginContradiction, TcPluginOk, ..), TcPluginRewriteResult(..)
   , RewriteEnv(..)
   , shimRewriter
   )
@@ -28,11 +28,13 @@ module GHC.TcPlugin.API.Internal.Shim
 import Prelude
   hiding ( Floating(cos), iterate )
 import Control.Monad
-  ( forM, when )
-#if !MIN_VERSION_ghc(9,2,0)
+  ( forM, unless, when )
 import Data.Foldable
-  ( foldlM )
+  ( traverse_
+#if !MIN_VERSION_ghc(9,2,0)
+  , foldlM
 #endif
+  )
 #if MIN_VERSION_ghc(9,2,0)
 import Data.List.NonEmpty
   ( NonEmpty((:|)) )
@@ -71,7 +73,11 @@ import GHC.Core.TyCon
   )
 import GHC.Core.Type
   ( TyVar
-  , tcView , mkTyConApp, mkScaled, coreView , tymult, tyVarKind
+  , tcView , mkTyConApp
+#if MIN_VERSION_ghc(9,0,0)
+  , mkScaled, tymult
+#endif
+  , coreView, tyVarKind
   )
 #if MIN_VERSION_ghc(9,2,0)
 import GHC.Data.Maybe
@@ -88,6 +94,7 @@ import GHC.Tc.Solver.Monad
   , matchFam
   , runTcPluginTcS, runTcSWithEvBinds
   , traceTcS
+  , setWantedEvTerm
 #if MIN_VERSION_ghc(9,2,0)
   , lookupFamAppCache, lookupFamAppInert, extendFamAppCache
   , pattern EqualCtList
@@ -96,11 +103,13 @@ import GHC.Tc.Solver.Monad
 #endif
   )
 import GHC.Tc.Types
-  ( TcPluginM, TcPluginResult(..)
+  ( TcPluginM
   , unsafeTcPluginTcM, getEvBindsTcPluginM
   )
+import qualified GHC.Tc.Types as GHC
+  ( TcPluginResult(..) )
 import GHC.Tc.Types.Constraint
-  ( Ct(..)
+  ( Ct(..), CtEvidence(..)
   , CtLoc, CtFlavour(..), CtFlavourRole, ShadowInfo(..)
 #if MIN_VERSION_ghc(9,2,0)
   , CanEqLHS(..)
@@ -149,13 +158,88 @@ import GHC.TcPlugin.API.Internal.Shim.Reduction
 
 --------------------------------------------------------------------------------
 
+-- | The type-family rewriting environment.
 data RewriteEnv
   = FE { fe_loc     :: !CtLoc
        , fe_flavour :: !CtFlavour
        , fe_eq_rel  :: !EqRel
        }
 
-type TcPluginSolveResult = TcPluginResult
+-- | Result of running a solver plugin.
+data TcPluginSolveResult
+  = TcPluginSolveResult
+  { -- | Insoluble constraints found by the plugin.
+    --
+    -- These constraints will be added to the inert set,
+    -- and reported as insoluble to the user.
+    tcPluginInsolubleCts :: [Ct]
+    -- | Solved constraints, together with their evidence.
+    --
+    -- These are removed from the inert set, and the
+    -- evidence for them is recorded.
+  , tcPluginSolvedCts :: [(EvTerm, Ct)]
+    -- | New constraints that the plugin wishes to emit.
+    --
+    -- These will be added to the work list.
+  , tcPluginNewCts :: [Ct]
+  }
+
+-- | The plugin found a contradiction.
+-- The returned constraints are removed from the inert set,
+-- and recorded as insoluble.
+--
+-- The returned list of constraints should never be empty.
+pattern TcPluginContradiction :: [Ct] -> TcPluginSolveResult
+pattern TcPluginContradiction insols
+  = TcPluginSolveResult
+  { tcPluginInsolubleCts = insols
+  , tcPluginSolvedCts    = []
+  , tcPluginNewCts       = [] }
+
+-- | The plugin has not found any contradictions,
+--
+-- The first field is for constraints that were solved.
+-- The second field contains new work, that should be processed by
+-- the constraint solver.
+pattern TcPluginOk :: [(EvTerm, Ct)] -> [Ct] -> TcPluginSolveResult
+pattern TcPluginOk solved new
+  = TcPluginSolveResult
+  { tcPluginInsolubleCts = []
+  , tcPluginSolvedCts    = solved
+  , tcPluginNewCts       = new }
+
+-- The 'TcPluginSolveResult' datatype changed in GHC 9.4,
+-- allowing users to return solved and new constraints even in case of
+-- a contradiction.
+--
+-- This function simply drops the solved and new constraints on older versions,
+-- although it does at least still bind the evidence in case of solved Wanteds.
+adaptSolveResult :: Bool -> TcPluginSolveResult -> TcPluginM GHC.TcPluginResult
+adaptSolveResult doingGivens
+  ( TcPluginSolveResult
+    { tcPluginInsolubleCts = insols
+    , tcPluginSolvedCts    = solved
+    , tcPluginNewCts       = new
+    }
+  )
+    | null insols
+    = pure $ GHC.TcPluginOk solved new
+    | null solved && null new
+    = pure $ GHC.TcPluginContradiction insols
+    | otherwise
+    = do
+      evBinds <- getEvBindsTcPluginM
+      unsafeTcPluginTcM . runTcSWithEvBinds evBinds $ do
+        unless doingGivens $ traverse_ ( uncurry setEv ) solved
+        --updInertCans (removeInertCts $ fmap snd solved) -- These don't do anything, as the inert set and work list
+        --emitWork new                                    -- are confined to this run of the plugin.
+      pure $ GHC.TcPluginContradiction insols
+  where
+    setEv :: EvTerm -> Ct -> TcS ()
+    setEv ev ( ctEvidence -> CtWanted { ctev_dest = dest } )
+      = setWantedEvTerm dest ev
+    setEv _ _
+      = pure ()
 
 data TcPluginRewriteResult
   =
@@ -173,28 +257,38 @@ data TcPluginRewriteResult
 
 type Rewriter = RewriteEnv -> [Ct] -> [Type] -> TcPluginM TcPluginRewriteResult
 
-type Rewriters = UniqFM TyCon Rewriter
+type Rewriters =
+  UniqFM
+#if MIN_VERSION_ghc(9,0,0)
+    TyCon
+#endif
+    Rewriter
 
+-- | Emulate type-family rewriting functionality in a constraint solving plugin,
+-- by traversing through all the constraints and rewriting any type-family applications
+-- inside them.
 shimRewriter :: [Ct] -> [Ct] -> [Ct]
              -> Rewriters
              -> ( [Ct] -> [Ct] -> [Ct] -> TcPluginM TcPluginSolveResult )
-             -> TcPluginM TcPluginSolveResult
+             -> TcPluginM GHC.TcPluginResult
 shimRewriter givens deriveds wanteds rws solver
   | isNullUFM rws
-  = solver givens deriveds wanteds
+  = adaptSolveResult (null wanteds) =<< solver givens deriveds wanteds
   | otherwise
   = do
-    res <- solver givens deriveds wanteds
-    case res of
-      contra@( TcPluginContradiction {} ) ->
-        pure contra
-      TcPluginOk solved new -> do
-        ( rewrittenDeriveds, solvedDeriveds, newCts1 ) <- traverseCts ( reduceCt rws givens ) deriveds
-        ( rewrittenWanteds , solvedWanteds , newCts2 ) <- traverseCts ( reduceCt rws givens ) wanteds
-        pure $
-            TcPluginOk
-              ( solved ++ solvedDeriveds ++ solvedWanteds )
-              ( new ++ newCts1 ++ rewrittenDeriveds ++ newCts2 ++ rewrittenWanteds )
+    TcPluginSolveResult
+      { tcPluginInsolubleCts = contras
+      , tcPluginSolvedCts    = solved
+      , tcPluginNewCts       = new
+      } <- solver givens deriveds wanteds
+    ( rewrittenDeriveds, solvedDeriveds, newCts1 ) <- traverseCts ( reduceCt rws givens ) deriveds
+    ( rewrittenWanteds , solvedWanteds , newCts2 ) <- traverseCts ( reduceCt rws givens ) wanteds
+    adaptSolveResult (null wanteds) $
+      TcPluginSolveResult
+        { tcPluginInsolubleCts = contras
+        , tcPluginSolvedCts    = solved ++ solvedDeriveds ++ solvedWanteds
+        , tcPluginNewCts       = new ++ newCts1 ++ rewrittenDeriveds ++ newCts2 ++ rewrittenWanteds
+        }
 
 reduceCt :: Rewriters
          -> [Ct]
@@ -262,12 +356,31 @@ rewrite_one (TyConApp tc tys)
   | otherwise
   = rewrite_ty_con_app tc tys
 
-rewrite_one (FunTy { ft_af = vis, ft_mult = mult, ft_arg = ty1, ft_res = ty2 })
+rewrite_one
+  (FunTy
+    { ft_af = vis
+#if MIN_VERSION_ghc(9,0,0)
+    , ft_mult = mult
+#endif
+    , ft_arg = ty1
+    , ft_res = ty2
+    })
   = do { arg_redn <- rewrite_one ty1
        ; res_redn <- rewrite_one ty2
+#if MIN_VERSION_ghc(9,0,0)
        ; w_redn <- setEqRel NomEq $ rewrite_one mult
+#endif
        ; role <- getRole
-       ; return $ mkFunRedn role vis w_redn arg_redn res_redn }
+       ; return $
+           mkFunRedn
+             role
+             vis
+#if MIN_VERSION_ghc(9,0,0)
+             w_redn
+#endif
+             arg_redn
+             res_redn
+        }
 
 rewrite_one ty@(ForAllTy {})
   = do { let (bndrs, rho) = tcSplitForAllTyVarBinders ty
@@ -555,9 +668,27 @@ split_pi_tys' ty = split ty ty
   split _ (ForAllTy b res) =
     let !(bs, ty', _) = split res res
     in  (Named b : bs, ty', True)
-  split _ (FunTy { ft_af = af, ft_mult = w, ft_arg = arg, ft_res = res }) =
+  split _
+    (FunTy
+      { ft_af = af
+#if MIN_VERSION_ghc(9,0,0)
+      , ft_mult = w
+#endif
+      , ft_arg = arg
+      , ft_res = res
+      }
+    ) =
     let !(bs, ty', named) = split res res
-    in  (Anon af (mkScaled w arg) : bs, ty', named)
+    in  ( Anon
+          af
+#if MIN_VERSION_ghc(9,0,0)
+          (mkScaled w arg)
+#else
+          arg
+#endif
+          : bs
+        , ty', named
+        )
   split orig_ty ty' | Just ty'' <- coreView ty' = split orig_ty ty''
   split orig_ty _ = ([], orig_ty, False)
 {-# INLINE split_pi_tys' #-}
@@ -568,7 +699,15 @@ ty_con_binders_ty_binders' = foldr go ([], False)
     go (Bndr tv (NamedTCB vis)) (bndrs, _)
       = (Named (Bndr tv vis) : bndrs, True)
     go (Bndr tv (AnonTCB af))   (bndrs, n)
-      = (Anon af (tymult (tyVarKind tv)) : bndrs, n)
+      = (Anon af
+          (
+#if MIN_VERSION_ghc(9,0,0)
+            tymult
+#endif
+             (tyVarKind tv)
+          )
+          : bndrs
+        , n)
     {-# INLINE go #-}
 {-# INLINE ty_con_binders_ty_binders' #-}
 

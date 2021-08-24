@@ -1,4 +1,16 @@
 
+# Version 0.4.0.0 (2021-08-24)
+
+- Adapt to GHC 9.4 changes in the `TcPluginSolveResult` datatype:
+  are now able to solve and emit constraints even when reporting
+  a contradiction. This can help with error messages.
+  Unfortunately these extra constraints will be dropped in versions
+  of GHC prior to 9.4.
+
+- Add a utility module for name resolution using constrained traversals.
+
+- Add compatibility for GHC 8.10.
+
 # Version 0.3.1.0 (2021-08-09)
 
 Ensure that the coercions stored in `Reduction`s are always

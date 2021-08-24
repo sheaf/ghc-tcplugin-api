@@ -19,6 +19,7 @@ jobs:
         cabal:
           - latest
         ghc:
+          - "8.10.5"
           - "9.0.1"
 
     steps:

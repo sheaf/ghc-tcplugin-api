@@ -6,6 +6,7 @@
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE NamedFieldPuns #-}
+{-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -59,6 +60,8 @@ module GHC.TcPlugin.API.Internal
   where
 
 -- base
+import Data.Coerce
+  ( Coercible )
 import Data.Kind
   ( Constraint, Type )
 import GHC.TypeLits
@@ -186,10 +189,10 @@ type TcPluginRewriter
 -- > myTcPlugin :: [String] -> GHC.TcPlugin.API.TcPlugin
 -- > myTcPlugin args = ...
 data TcPlugin = forall s. TcPlugin
-  { tcPluginInit    :: TcPluginM Init s
+  { tcPluginInit :: TcPluginM Init s
       -- ^ Initialise plugin, when entering type-checker.
 
-  , tcPluginSolve   :: s -> TcPluginSolver
+  , tcPluginSolve :: s -> TcPluginSolver
       -- ^ Solve some constraints.
       --
       -- This function will be invoked at two points in the constraint solving
@@ -204,7 +207,12 @@ data TcPlugin = forall s. TcPlugin
       -- Use @ \\ _ _ _ -> pure $ TcPluginOK [] [] @ if your plugin
       -- does not provide this functionality.
 
-  , tcPluginRewrite :: s -> GHC.UniqFM GHC.TyCon TcPluginRewriter
+  , tcPluginRewrite
+      :: s -> GHC.UniqFM
+#if MIN_VERSION_ghc(9,0,0)
+                GHC.TyCon
+#endif
+                TcPluginRewriter
     -- ^ Rewrite saturated type family applications.
     --
     -- The plugin is expected to supply a mapping from type family names to
@@ -216,7 +224,7 @@ data TcPlugin = forall s. TcPlugin
     --
     -- Use @ const emptyUFM @ if your plugin does not provide this functionality.
 
-  , tcPluginStop    :: s -> TcPluginM Stop ()
+  , tcPluginStop :: s -> TcPluginM Stop ()
    -- ^ Clean up after the plugin, when exiting the type-checker.
   }
 
@@ -286,7 +294,7 @@ askRewriteEnv = TcPluginRewriteM ( \ _ rewriteEnv -> pure rewriteEnv )
 -- Note that you must import the internal module in order to access the methods.
 -- Please report a bug if you find yourself needing this functionality.
 type  MonadTcPlugin :: ( Type -> Type ) -> Constraint
-class Monad m => MonadTcPlugin m where
+class ( Monad m, ( forall x y. Coercible x y => Coercible (m x) (m y) ) ) => MonadTcPlugin m where
 
   {-# MINIMAL liftTcPluginM, unsafeWithRunInTcM #-}
 
@@ -361,7 +369,7 @@ instance MonadTcPlugin ( TcPluginM Rewrite ) where
 instance MonadTcPlugin ( TcPluginM Stop ) where
   liftTcPluginM = TcPluginStopM
   unsafeWithRunInTcM runInTcM
-    = unsafeLiftTcM $ runInTcM 
+    = unsafeLiftTcM $ runInTcM
 #ifdef HAS_REWRITING
       ( GHC.runTcPluginM . tcPluginStopM )
 #else
@@ -432,7 +440,12 @@ mkTcPlugin ( TcPlugin
 #else
     adaptUserSolveAndRewrite
       :: ( userDefs -> TcPluginSolver )
-      -> ( userDefs -> GHC.UniqFM GHC.TyCon TcPluginRewriter )
+      -> ( userDefs -> GHC.UniqFM
+#if MIN_VERSION_ghc(9,0,0)
+                         GHC.TyCon
+#endif
+                         TcPluginRewriter
+         )
       -> TcPluginDefs userDefs
       -> GHC.TcPluginSolver
     adaptUserSolveAndRewrite userSolve userRewrite ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs } )
@@ -492,7 +505,7 @@ instance TypeError ( 'Text "Cannot emit new work in 'tcPluginStop'." )
 -- | Use this type like 'GHC.TypeLits.ErrorMessage' to write an error message.
 -- This error message can then be thrown at the type-level by the plugin,
 -- by emitting a wanted constraint whose predicate is obtained from 'mkTcPluginErrorTy'.
--- 
+--
 -- A 'GHC.Tc.Types.Constraint.CtLoc' will still need to be provided in order to inform GHC of the
 -- origin of the error (e.g.: which part of the source code should be
 -- highlighted?). See 'GHC.TcPlugin.API.setCtLocM'.
