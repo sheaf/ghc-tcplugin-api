@@ -1,4 +1,10 @@
 
+# Version 0.4.1.0 (2021-08-24)
+
+- Re-export a few GHC modules, such as GHC.Core.Make and GHC.Plugins.
+  These re-exports might be changed to be more selective in the future
+  to aid cross-version compatibility.
+
 # Version 0.4.0.0 (2021-08-24)
 
 - Adapt to GHC 9.4 changes in the `TcPluginSolveResult` datatype:

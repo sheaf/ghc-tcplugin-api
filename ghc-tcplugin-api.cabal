@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.4.0.0
+version:        0.4.1.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
@@ -58,6 +58,13 @@ library
     GHC.TcPlugin.API.Names,
     GHC.TcPlugin.API.Internal
 
+  reexported-modules:
+      GHC.Core.Make
+    , GHC.Plugins
+    , GHC.Types.Unique.DFM
+    , GHC.Types.Unique.FM
+    , GHC.Utils.Outputable
+
   if impl(ghc >= 9.3.0)
     cpp-options: -DHAS_REWRITING
   else
@@ -70,13 +77,6 @@ library
 
   -- Compatibility for versions of GHC prior to 9.0.
   if impl(ghc < 9.0)
-
-    reexported-modules:
-        GHC.Core.Make
-      , GHC.Plugins
-      , GHC.Types.Unique.DFM
-      , GHC.Types.Unique.FM
-      , GHC.Utils.Outputable
 
     mixins:
       ghc
