@@ -8,19 +8,16 @@ on:
 
 jobs:
   cabal:
-    name: ${{ matrix.os }} / ghc ${{ matrix.ghc }}
-    runs-on: ${{ matrix.os }}
+    name: ${{ matrix.cfg.os }} / ghc ${{ matrix.cfg.ghc }}
+    runs-on: ${{ matrix.cfg.os }}
     strategy:
       matrix:
-        os:
-          - ubuntu-latest
-          - macOS-latest
-          - windows-latest
-        cabal:
-          - latest
-        ghc:
-          - "8.10.5"
-          - "9.0.1"
+        cfg:
+          - { os: ubuntu-latest  , ghc: "head"   }
+          - { os: ubuntu-latest  , ghc: "9.0.1"  }
+          - { os: ubuntu-latest  , ghc: "8.10.5" }
+          - { os: macOS-latest   , ghc: "latest" }
+          - { os: windows-latest , ghc: "latest" }
 
     steps:
     - name: Checkout commit
@@ -30,8 +27,8 @@ jobs:
     - name: Set up GHC & cabal
       uses: haskell/actions/setup@v1
       with:
-        ghc-version: ${{ matrix.ghc }}
-        cabal-version: ${{ matrix.cabal }}
+        ghc-version: ${{ matrix.cfg.ghc }}
+        cabal-version: ${{ matrix.cfg.cabal }}
 
     - name: Build ghc-tcplugin-api
       run: cabal build ghc-tcplugin-api
