@@ -50,7 +50,8 @@ import Control.Monad.Trans.State.Strict
 
 -- ghc
 import GHC.Core.Coercion
-  ( mkReflCo, mkSymCo
+  ( coercionRole
+  , mkReflCo, mkSymCo
   , mkAppCos, mkNomReflCo, mkSubCo
   , mkTyConAppCo, tyConRolesX
   , tyConRolesRepresentational
@@ -310,11 +311,16 @@ reduceCt rws givens ct = do
         Given     -> error "ghc-tcplugin-api: unexpected Given in reduceCt"
         Wanted {} -> newWanted  ( ctLoc ct ) predTy'
         Derived   -> newDerived ( ctLoc ct ) predTy'
+      let
+        role :: Role
+        role = coercionRole co
+        cast_co :: Coercion
+        cast_co = mkSymCo $ case role of
+          Nominal -> mkSubCo co
+          _       -> co
       pure ( Just
               ( mkNonCanonical ctEv'
-              , ( evCast ( ctEvExpr ctEv' ) ( mkSymCo co )
-                , ct
-                )
+              , ( evCast ( ctEvExpr ctEv' ) cast_co, ct )
               )
            , newCts
            )

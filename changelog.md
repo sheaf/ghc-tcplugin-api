@@ -1,4 +1,9 @@
 
+# Version 0.5.1.0 (2021-08-31)
+
+- Fix a bug in the type-family rewriting compatibility layer (GHC 8.10, 9.0, 9.2)
+  by correctly downgrading the coercion used to cast the evidence, when necessary.
+
 # Version 0.5.0.0 (2021-08-30)
 
 - Re-export some additional types and functions that are useful for inspecting
