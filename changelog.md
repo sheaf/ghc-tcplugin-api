@@ -1,4 +1,9 @@
 
+# Version 0.5.0.0 (2021-08-30)
+
+- Re-export some additional types and functions that are useful for inspecting
+  and constructing evidence terms, such as `mkTyVar`, `newName`, `mkLocalId`, `lookupEvBind`...
+
 # Version 0.4.1.0 (2021-08-24)
 
 - Re-export a few GHC modules, such as GHC.Core.Make and GHC.Plugins.

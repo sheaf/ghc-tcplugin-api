@@ -241,7 +241,6 @@ module GHC.TcPlugin.API
   , newCoercionHole
   , mkReflCo, mkSymCo, mkTransCo, mkUnivCo
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
-  , pattern Coercion
 
     -- *** Evidence terms
 
@@ -255,8 +254,9 @@ module GHC.TcPlugin.API
   , newEvVar, setEvBind
   , evCoercion, evCast
   , ctEvExpr
-  , pattern Type
---, askEvBinds
+  , askEvBinds, lookupEvBind, eb_lhs, eb_rhs
+  , newName, mkLocalId, mkTyVar
+  , ctev_pred, ctev_evar, ctev_loc, ctev_dest
 
     -- *** Class dictionaries
 
@@ -266,7 +266,11 @@ module GHC.TcPlugin.API
     --
     -- The class dictionary constructor can be obtained using 'classDataCon'.
     -- Functions from "GHC.Core.Make", re-exported here, will be useful for
-    -- constructing the necessary terms, e.g. 'mkCoreApp' for an application.
+    -- constructing the necessary terms.
+    --
+    -- For instance, we can apply the class data constructor using 'mkCoreConApps'.
+    -- Remember that the type-level arguments (the typeclass variables) come first,
+    -- before the actual evidence term (the class dictionary expression).
 
   , classDataCon
   , module GHC.Core.Make
@@ -366,7 +370,7 @@ module GHC.TcPlugin.API
   , mkPiTy, mkPiTys
 
 #if MIN_VERSION_ghc(9,0,0)
-  , Mult
+  , Mult, pattern One, pattern Many
   , mkFunTyMany
   , mkScaledFunTy
   , mkVisFunTyMany, mkVisFunTysMany
@@ -423,8 +427,10 @@ module GHC.TcPlugin.API
 
     -- | === Coercions and evidence
   , Coercion, Role(..), UnivCoProvenance
-  , CoercionHole
-  , EvBind, EvTerm, EvVar, EvExpr, EvBindsVar
+  , CoercionHole(..)
+  , EvBind, EvTerm(EvExpr), EvVar, EvExpr, EvBindsVar
+  , Expr(Var, Type, Coercion), CoreBndr
+  , TcEvDest(..)
 
     -- | == The type-checking environment
   , TcGblEnv, TcLclEnv
@@ -440,7 +446,7 @@ import GHC
   ( TyThing(..) )
 import GHC.Builtin.Types
 import GHC.Core
-  ( Expr(Type, Coercion) )
+  ( CoreBndr, Expr(..) )
 import GHC.Core.Class
   ( Class(..), FunDep )
 import GHC.Core.Coercion
@@ -489,6 +495,9 @@ import GHC.Core.Type
   ( eqType, mkTyConTy, mkTyConApp, splitTyConApp_maybe
   , mkAppTy, mkAppTys, isTyVarTy, getTyVar_maybe
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
+#if MIN_VERSION_ghc(9,0,0)
+  , pattern One, pattern Many
+#endif
   )
 import GHC.Data.FastString
   ( FastString, fsLit )
@@ -503,7 +512,7 @@ import GHC.Tc.Types
   )
 import GHC.Tc.Types.Constraint
   ( Ct(..), CtLoc(..), CtEvidence(..), CtFlavour(..)
-  , QCInst(..)
+  , QCInst(..), TcEvDest(..)
   , ctPred, ctLoc, ctEvidence, ctEvExpr
   , ctFlavour, ctEqRel, ctOrigin
   , bumpCtLocDepth
@@ -511,15 +520,19 @@ import GHC.Tc.Types.Constraint
   )
 import GHC.Tc.Types.Evidence
   ( EvBind(..), EvTerm(..), EvExpr, EvBindsVar(..)
-  , evCoercion, evCast
+  , evCoercion, evCast, lookupEvBind
   )
 import GHC.Tc.Types.Origin
   ( CtOrigin(..) )
+import GHC.Tc.Utils.Monad
+  ( newName )
 import qualified GHC.Tc.Utils.Monad
   as GHC
     ( traceTc, setCtLocM )
 import GHC.Tc.Utils.TcType
   ( TcType, TcLevel )
+import GHC.Types.Id
+  ( Id, mkLocalId )
 import GHC.Types.Name
   ( Name )
 import GHC.Types.Name.Occurrence
@@ -540,7 +553,9 @@ import GHC.Types.Unique.FM as UniqFM
 import GHC.Types.Unique.DFM
   ( UniqDFM, lookupUDFM, lookupUDFM_Directly, elemUDFM )
 import GHC.Types.Var
-  ( Id, TcTyVar, EvVar )
+  ( TcTyVar, EvVar
+  , mkTyVar
+  )
 import GHC.Utils.Outputable
   ( Outputable(..), SDoc )
 #if MIN_VERSION_ghc(9,2,0)

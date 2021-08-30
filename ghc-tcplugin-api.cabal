@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.4.1.0
+version:        0.5.0.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
@@ -113,6 +113,7 @@ library
         , TcRnMonad  as GHC.Tc.Utils.Monad
         , TcType     as GHC.Tc.Utils.TcType
 
+        , Id         as GHC.Types.Id
         , Name       as GHC.Types.Name
         , OccName    as GHC.Types.Name.Occurrence
         , Unique     as GHC.Types.Unique
