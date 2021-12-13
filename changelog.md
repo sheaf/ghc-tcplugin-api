@@ -1,4 +1,10 @@
 
+# Version 0.6.0.0 (2021-12-13)
+
+- Add support for GHC 8.8.
+
+- Re-export `evDataConApp`, which is useful for constructing typeclass dictionaries.
+
 # Version 0.5.1.0 (2021-08-31)
 
 - Fix a bug in the type-family rewriting compatibility layer (GHC 8.10, 9.0, 9.2)
