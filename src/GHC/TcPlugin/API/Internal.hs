@@ -10,7 +10,6 @@
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -63,7 +62,7 @@ module GHC.TcPlugin.API.Internal
 import Data.Coerce
   ( Coercible )
 import Data.Kind
-  ( Constraint, Type )
+  ( Type )
 import GHC.TypeLits
   ( TypeError, ErrorMessage(..) )
 
@@ -230,8 +229,7 @@ data TcPlugin = forall s. TcPlugin
 
 -- | The monad used for a type-checker plugin, parametrised by
 -- the 'TcPluginStage' of the plugin.
-type TcPluginM :: TcPluginStage -> ( Type -> Type )
-data family TcPluginM s
+data family TcPluginM (s :: TcPluginStage) :: Type -> Type
 newtype instance TcPluginM Init a =
   TcPluginInitM { tcPluginInitM :: GHC.TcPluginM a }
   deriving newtype ( Functor, Applicative, Monad )
@@ -293,8 +291,7 @@ askRewriteEnv = TcPluginRewriteM ( \ _ rewriteEnv -> pure rewriteEnv )
 --
 -- Note that you must import the internal module in order to access the methods.
 -- Please report a bug if you find yourself needing this functionality.
-type  MonadTcPlugin :: ( Type -> Type ) -> Constraint
-class ( Monad m, ( forall x y. Coercible x y => Coercible (m x) (m y) ) ) => MonadTcPlugin m where
+class ( Monad m, ( forall x y. Coercible x y => Coercible (m x) (m y) ) ) => MonadTcPlugin (m :: Type -> Type) where
 
   {-# MINIMAL liftTcPluginM, unsafeWithRunInTcM #-}
 
@@ -479,7 +476,6 @@ mkTcPlugin ( TcPlugin
 --
 -- See 'mkTcPluginErrorTy' and 'GHC.TcPlugin.API.emitWork' for functions
 -- which require this typeclass.
-type  MonadTcPluginWork :: ( Type -> Type ) -> Constraint
 class MonadTcPlugin m => MonadTcPluginWork m where
   {-# MINIMAL #-} -- to avoid the methods appearing in the haddocks
   askBuiltins :: m BuiltinDefs

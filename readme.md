@@ -3,7 +3,7 @@
 # ghc-tcplugin-api <a href="https://hackage.haskell.org/package/ghc-tcplugin-api" alt="Hackage"><img src="https://img.shields.io/hackage/v/ghc-tcplugin-api.svg" /></a>
 
 This library provides a convenient and cross-compatible interface for authors
-of GHC type-checking plugins (starting from GHC 8.10).    
+of GHC type-checking plugins (starting from GHC 8.8).    
 
 Different stages of a type-checking plugin (initialisation, solving, rewriting, shutdown) are given
 different monads to operate within. This ensures operations that only make sense in one context

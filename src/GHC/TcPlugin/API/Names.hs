@@ -12,11 +12,14 @@
 {-# LANGUAGE QuantifiedConstraints #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeFamilies #-}
 {-# LANGUAGE TypeOperators #-}
 {-# LANGUAGE UndecidableInstances #-}
+
+#if MIN_VERSION_ghc(9,0,0)
+{-# LANGUAGE StandaloneKindSignatures #-}
+#endif
 
 {-|
 Module: GHC.TcPlugin.API.Names
@@ -153,8 +156,7 @@ import GHC.TcPlugin.API.Internal
 
 -- | A 'QualifiedName' is the name of something,
 -- together with the names of the module and package it comes from.
-type QualifiedName :: k -> Type
-data QualifiedName thing
+data QualifiedName (thing :: Type)
   = Qualified
     { -- | Name of the thing (e.g. name of the 'TyCon' or 'Class').
       name    :: String
@@ -177,8 +179,7 @@ data QualifiedName thing
 data NameResolution = Named | Resolved
 
 -- | Use this to refer to a @Promoted DataCon@.
-type Promoted :: k -> Type
-data Promoted thing
+data Promoted (thing :: k) :: Type
 
 -- | Type-family used for higher-kinded data pattern.
 --
@@ -197,9 +198,15 @@ data Promoted thing
 -- (a typeclass name and a type-constructor name, with associated module & packages),
 -- whereas a record of type @MyData Resolved@ contains a typeclass's @Class@
 -- as well as a type-constructor's @TyCon@.
+#if MIN_VERSION_ghc(9,0,0)
 type Wear :: forall k. NameResolution -> k -> Type
-type family Wear n thing where
-  Wear Named    thing              = QualifiedName thing
+#endif
+type family Wear (n :: NameResolution) (thing :: k) :: Type where
+#if MIN_VERSION_ghc(9,0,0)
+  Wear @Type Named thing           = QualifiedName thing
+#else
+  Wear Named thing                 = QualifiedName thing
+#endif
   Wear Resolved (Promoted DataCon) = TyCon
   Wear Resolved (Promoted a)
     = TypeError
@@ -210,8 +217,7 @@ type family Wear n thing where
 
 -- | Retrieve the underlying thing being referred to by inspecting
 -- the type parameter of 'QualifiedName'.
-type UnwearNamed :: Type -> Type
-type family UnwearNamed loc where
+type family UnwearNamed (loc :: Type) :: Type where
   UnwearNamed (QualifiedName thing) = thing
 
 -- | Type-class overloading things that can be looked up by name:
@@ -222,7 +228,7 @@ type family UnwearNamed loc where
 #if MIN_VERSION_ghc(9,0,0)
 type Lookupable :: forall {k}. k -> Constraint
 #endif
-class Lookupable a where
+class Lookupable (a :: k) where
   mkOccName :: String -> OccName
   lookup :: MonadTcPlugin m => Name -> m (Wear Resolved a)
 
@@ -274,8 +280,7 @@ instance Lookupable (Promoted DataCon) where
 --
 -- This returns a record containing the looked up things we want,
 -- e.g. @myClass :: Class@, @myPromDataCon :: TyCon@, etc.
-type ResolveNames :: ( NameResolution -> Type ) -> Constraint
-class ResolveNames f where
+class ResolveNames (f :: NameResolution -> Type) where
   resolve_names :: ( Coercible res ( f Resolved ), MonadTcPlugin m )
                 => f Named -> m res
   -- Workaround: the result is anything coercible to "f Resolved" rather than just "f Resolved",
@@ -321,27 +326,37 @@ instance ( Generic (f Named)
 -- which allows one to write 'resolveName':
 --
 -- > resolveName :: ... => Wear Named thing -> m ( Wear Resolved thing )
-type     ResolveName :: Type -> Type -> Constraint
 class    ( a ~ Wear Named    ( UnwearNamed a )
          , b ~ Wear Resolved ( UnwearNamed a )
          , Lookupable ( UnwearNamed a )
          )
-      => ResolveName a b
+      => ResolveName (a :: Type) (b :: Type)
 instance ( a ~ Wear Named    ( UnwearNamed a )
          , b ~ Wear Resolved ( UnwearNamed a )
          , Lookupable ( UnwearNamed a )
          )
       => ResolveName a b
 
-resolveName :: forall thing m
+resolveName :: forall (thing :: Type) m
             .  ResolveName ( Wear Named thing ) ( Wear Resolved thing )
             => MonadTcPlugin m
             => Wear Named thing
             -> StateT ImportedModules m ( Wear Resolved thing )
 resolveName (Qualified str mod_name mb_pkg) = do
   md <- lookupModule mb_pkg mod_name
-  nm <- lift $ lookupOrig md (mkOccName @thing str)
-  lift $ lookup @thing nm
+  nm <- lift $ lookupOrig md
+                 (mkOccName
+#if !MIN_VERSION_ghc(9,0,0)
+                   @_
+#endif
+                   @thing
+                   str
+                 )
+  lift $ lookup
+#if !MIN_VERSION_ghc(9,0,0)
+           @_
+#endif
+           @thing nm
 
 --------------------------------------------------------------------------------
 -- Caching of found modules.
@@ -410,16 +425,11 @@ lookupModule mb_pkg mod_name = do
 --------------------------------------------------------------------------------
 -- Constrained traversals.
 
-type TraversalC :: ( Type -> Type -> Constraint ) -> Type -> Type -> Type
-type TraversalC c s t
+type TraversalC (c :: Type -> Type -> Constraint) (s :: Type)  (t :: Type)
   =  forall f. ( Applicative f )
   => ( forall a b. c a b => a -> f b ) -> s -> f t
 
-type GTraversableC :: ( Type -> Type -> Constraint )
-                   -> ( Type -> Type )
-                   -> ( Type -> Type )
-                   -> Constraint
-class GTraversableC c s t where
+class GTraversableC (c :: Type -> Type -> Constraint) (s :: Type -> Type) (t :: Type -> Type) where
   gtraverseC :: TraversalC c (s x) (t x)
 
 instance
@@ -459,7 +469,6 @@ instance c a b => GTraversableC c (Rec0 a) (Rec0 b) where
 --
 -- Generic instances can be derived for type constructors via
 -- @'Generically1' F@ using @-XDerivingVia@.
-type    Generically1 :: ( k -> Type ) -> ( k -> Type )
-newtype Generically1 f a = Generically1 ( f a )
+newtype Generically1 (f :: k -> Type) (a :: k) = Generically1 ( f a )
   deriving newtype Generic
 #endif

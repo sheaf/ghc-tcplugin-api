@@ -20,7 +20,11 @@ import GHC.Core.Coercion
   , mkCoherenceLeftCo, mkNomReflCo
 #endif
   , coercionKind
+#if MIN_VERSION_ghc(8,10,0)
   , coToMCo
+#else
+  , isReflCo
+#endif
   , decomposePiCos, downgradeRole
   , liftCoSubst, emptyLiftingContext, extendLiftingContextAndInScope, zapLiftingContext
   , mkAppCo, mkAppCos
@@ -41,7 +45,10 @@ import GHC.Core.TyCo.Rep
 import GHC.Core.TyCon
   ( TyCon )
 import GHC.Core.Type
-  ( AnonArgFlag, ArgFlag, Kind, Type, TyVar, TyVarBinder
+  ( ArgFlag, Kind, Type, TyVar, TyVarBinder
+#if MIN_VERSION_ghc(8,10,0)
+  , AnonArgFlag
+#endif
   , binderVars
   , mkAppTy, mkAppTys, mkCastTy, mkCoercionTy, mkForAllTy, mkForAllTys
   , mkTyConApp, mkPiTys
@@ -323,14 +330,19 @@ mkAppRedn (Reduction co1 ty1) (Reduction co2 ty2)
 --
 -- Combines 'mkFunCo' and 'mkFunTy'.
 mkFunRedn :: Role
+#if MIN_VERSION_ghc(8,10,0)
           -> AnonArgFlag
+#endif
 #if MIN_VERSION_ghc(9,0,0)
           -> ReductionN -- ^ multiplicity reduction
 #endif
           -> Reduction  -- ^ argument reduction
           -> Reduction  -- ^ result reduction
           -> Reduction
-mkFunRedn r vis
+mkFunRedn r
+#if MIN_VERSION_ghc(8,10,0)
+  vis
+#endif
 #if MIN_VERSION_ghc(9,0,0)
   (Reduction w_co w_ty)
 #endif
@@ -346,7 +358,9 @@ mkFunRedn r vis
             res_co
         )
         ( mkFunTy
+#if MIN_VERSION_ghc(8,10,0)
             vis
+#endif
 #if MIN_VERSION_ghc(9,0,0)
             w_ty
 #endif
@@ -579,4 +593,12 @@ castCoercionKind1 g r t1 t2 h
            MCo kind_co -> GRefl r (mkCastTy t1 h) $
                           MCo (mkSymCo h `mkTransCo` kind_co `mkTransCo` h)
       _ -> castCoercionKind2 g r t1 t2 h h
+#endif
+
+#if !MIN_VERSION_ghc(8,10,0)
+
+coToMCo :: Coercion -> MCoercion
+coToMCo co | isReflCo co = MRefl
+           | otherwise   = MCo co
+
 #endif

@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE PatternSynonyms #-}
@@ -251,6 +252,7 @@ module GHC.TcPlugin.API
     -- by combining evidence that is already available.
 
   , mkPluginUnivEvTerm
+  , evDataConApp
   , newEvVar, setEvBind
   , evCoercion, evCast
   , ctEvExpr
@@ -419,7 +421,9 @@ module GHC.TcPlugin.API
   , FastString
 
     -- | == Constraints
-  , Pred(..), EqRel(..), FunDep, CtFlavour
+  , Pred
+  , pattern ClassPred, pattern EqPred, pattern IrredPred, pattern ForAllPred
+  , EqRel(..), FunDep, CtFlavour
   , Ct, CtLoc, CtEvidence, CtOrigin
   , QCInst
   , Type, PredType
@@ -451,7 +455,10 @@ import GHC.Core.Class
   ( Class(..), FunDep )
 import GHC.Core.Coercion
   ( mkReflCo, mkSymCo, mkTransCo
-  , mkUnivCo, mkPrimEqPredRole
+  , mkUnivCo
+#if MIN_VERSION_ghc(8,10,0)
+  , mkPrimEqPredRole
+#endif
   )
 import GHC.Core.Coercion.Axiom
   ( Role(..) )
@@ -465,7 +472,13 @@ import GHC.Core.InstEnv
   ( InstEnvs(..) )
 import GHC.Core.Make
 import GHC.Core.Predicate
-  ( Pred(..), EqRel(..)
+  ( EqRel(..)
+#if MIN_VERSION_ghc(8,10,0)
+  , Pred(..)
+#else
+  , PredTree(..), TyCoBinder
+  , mkPrimEqPred, mkReprPrimEqPred
+#endif
   , classifyPredType, mkClassPred
   )
 #if HAS_REWRITING
@@ -478,11 +491,15 @@ import GHC.Core.TyCo.Rep
   ( Type, PredType, Kind
   , Coercion(..), CoercionHole(..)
   , UnivCoProvenance(..)
+#if MIN_VERSION_ghc(8,10,0)
   , AnonArgFlag(..)
+  , mkVisFunTy, mkInvisFunTy, mkVisFunTys
+  , mkPiTy
+#endif
+  , mkPiTys
   , mkTyVarTy, mkTyVarTys
-  , mkFunTy, mkVisFunTy, mkInvisFunTy, mkVisFunTys
   , mkForAllTy, mkForAllTys
-  , mkPiTy, mkPiTys
+  , mkFunTy
 #if MIN_VERSION_ghc(9,0,0)
   , Mult
   , mkFunTyMany
@@ -520,7 +537,7 @@ import GHC.Tc.Types.Constraint
   )
 import GHC.Tc.Types.Evidence
   ( EvBind(..), EvTerm(..), EvExpr, EvBindsVar(..)
-  , evCoercion, evCast, lookupEvBind
+  , evCoercion, evCast, lookupEvBind, evDataConApp
   )
 import GHC.Tc.Types.Origin
   ( CtOrigin(..) )
@@ -557,7 +574,11 @@ import GHC.Types.Var
   , mkTyVar
   )
 import GHC.Utils.Outputable
-  ( Outputable(..), SDoc )
+  ( Outputable(..), SDoc
+#if !MIN_VERSION_ghc(8,10,0)
+  , panic
+#endif
+  )
 #if MIN_VERSION_ghc(9,2,0)
 import GHC.Unit.Finder
   ( FindResult(..) )
@@ -827,5 +848,39 @@ mkTyFamAppReduction str role tc args ty =
 #if !MIN_VERSION_ghc(9,0,0)
 
 type UniqFM ty a = GHC.UniqFM a
+
+#endif
+
+#if !MIN_VERSION_ghc(8,10,0)
+
+-- | The non-dependent version of 'ArgFlag'.
+-- See Note [AnonArgFlag]
+-- Appears here partly so that it's together with its friends ArgFlag
+-- and ForallVisFlag, but also because it is used in IfaceType, rather
+-- early in the compilation chain
+data AnonArgFlag
+  = VisArg    -- ^ Used for @(->)@: an ordinary non-dependent arrow.
+              --   The argument is visible in source code.
+  | InvisArg  -- ^ Used for @(=>)@: a non-dependent predicate arrow.
+              --   The argument is invisible in source code.
+  deriving stock (Eq, Ord)
+
+type Pred = PredTree
+
+mkVisFunTy, mkInvisFunTy :: Type -> Type -> Type
+mkVisFunTy   = mkFunTy
+mkInvisFunTy = mkFunTy
+
+mkVisFunTys :: [Type] -> Type -> Type
+mkVisFunTys tys ty = foldr mkFunTy ty tys
+
+mkPiTy :: TyCoBinder -> Type -> Type
+mkPiTy bndr ty = mkPiTys [bndr] ty
+
+-- | Makes a lifted equality predicate at the given role
+mkPrimEqPredRole :: Role -> Type -> Type -> PredType
+mkPrimEqPredRole Nominal          = mkPrimEqPred
+mkPrimEqPredRole Representational = mkReprPrimEqPred
+mkPrimEqPredRole Phantom          = panic "mkPrimEqPredRole phantom"
 
 #endif

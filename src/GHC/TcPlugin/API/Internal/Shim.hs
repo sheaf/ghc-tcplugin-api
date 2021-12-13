@@ -364,13 +364,15 @@ rewrite_one (TyConApp tc tys)
 
 rewrite_one
   (FunTy
-    { ft_af = vis
-#if MIN_VERSION_ghc(9,0,0)
-    , ft_mult = mult
+#if MIN_VERSION_ghc(8,10,0)
+    vis
 #endif
-    , ft_arg = ty1
-    , ft_res = ty2
-    })
+#if MIN_VERSION_ghc(9,0,0)
+    mult
+#endif
+    ty1
+    ty2
+  )
   = do { arg_redn <- rewrite_one ty1
        ; res_redn <- rewrite_one ty2
 #if MIN_VERSION_ghc(9,0,0)
@@ -380,7 +382,9 @@ rewrite_one
        ; return $
            mkFunRedn
              role
+#if MIN_VERSION_ghc(8,10,0)
              vis
+#endif
 #if MIN_VERSION_ghc(9,0,0)
              w_redn
 #endif
@@ -676,17 +680,20 @@ split_pi_tys' ty = split ty ty
     in  (Named b : bs, ty', True)
   split _
     (FunTy
-      { ft_af = af
-#if MIN_VERSION_ghc(9,0,0)
-      , ft_mult = w
+#if MIN_VERSION_ghc(8,10,0)
+      af
 #endif
-      , ft_arg = arg
-      , ft_res = res
-      }
+#if MIN_VERSION_ghc(9,0,0)
+      w
+#endif
+      arg
+      res
     ) =
     let !(bs, ty', named) = split res res
     in  ( Anon
+#if MIN_VERSION_ghc(8,10,0)
           af
+#endif
 #if MIN_VERSION_ghc(9,0,0)
           (mkScaled w arg)
 #else
@@ -704,8 +711,17 @@ ty_con_binders_ty_binders' = foldr go ([], False)
   where
     go (Bndr tv (NamedTCB vis)) (bndrs, _)
       = (Named (Bndr tv vis) : bndrs, True)
-    go (Bndr tv (AnonTCB af))   (bndrs, n)
-      = (Anon af
+    go (Bndr tv
+         (AnonTCB
+#if MIN_VERSION_ghc(8,10,0)
+           af
+#endif
+         )
+       )   (bndrs, n)
+      = (Anon
+#if MIN_VERSION_ghc(8,10,0)
+          af
+#endif
           (
 #if MIN_VERSION_ghc(9,0,0)
             tymult
