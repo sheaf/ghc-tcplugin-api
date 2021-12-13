@@ -1,4 +1,16 @@
 
+# Version 0.6.1.0 (2021-12-13)
+
+- Re-export various useful types and functions to deal with type and coercion variables.
+
+- Re-export a few types and functions to deal with source locations.
+
+- Remove some re-exports for constructing function types: only re-export `mkVisFunTyMany`
+  and `mkVisFunTysMany`, as these are the only functions that make sense across all
+  GHC versions.
+
+- Re-export `panic` and `pprPanic`.
+
 # Version 0.6.0.0 (2021-12-13)
 
 - Add support for GHC 8.8.

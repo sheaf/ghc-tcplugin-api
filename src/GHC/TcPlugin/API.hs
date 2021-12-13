@@ -225,7 +225,16 @@ module GHC.TcPlugin.API
     --   - a type-class constraint? for which class?
     --   - an irreducible constraint, e.g. something of the form @c a@?
     --   - a quantified constraint?
+  , Pred
+  , pattern ClassPred, pattern EqPred, pattern IrredPred, pattern ForAllPred
   , classifyPredType, ctPred
+
+    -- | == Handling type variables
+  , TyVar, CoVar
+  , MetaDetails, MetaInfo
+  , isSkolemTyVar
+  , isMetaTyVar, isFilledMetaTyVar_maybe
+  , writeMetaTyVar
 
     -- | == Some further functions for inspecting constraints
   , eqType
@@ -365,18 +374,12 @@ module GHC.TcPlugin.API
   , mkAppTy, mkAppTys
 
     -- ** Function types
-
-  , AnonArgFlag(..)
-  , mkFunTy, mkVisFunTy, mkInvisFunTy, mkVisFunTys
+  , mkInvisFunTyMany, mkInvisFunTysMany
   , mkForAllTy, mkForAllTys
   , mkPiTy, mkPiTys
 
 #if MIN_VERSION_ghc(9,0,0)
   , Mult, pattern One, pattern Many
-  , mkFunTyMany
-  , mkScaledFunTy
-  , mkVisFunTyMany, mkVisFunTysMany
-  , mkInvisFunTyMany, mkInvisFunTysMany
 #endif
 
     -- ** Zonking
@@ -387,6 +390,13 @@ module GHC.TcPlugin.API
     -- See the Note [What is zonking?] in GHC's source code for more information.
   , zonkTcType
   , zonkCt
+
+    -- ** Panicking
+
+    -- | It is often better for type-checking plugins to panic when encountering a problem,
+    -- as opposed to silently doing something wrong. Use 'pprPanic' to throw an informative
+    -- error message, so that users of your plugin can report an issue if a problem occurs.
+  , panic, pprPanic
 
     -- ** Map-like data structures based on 'Unique's
 
@@ -421,8 +431,6 @@ module GHC.TcPlugin.API
   , FastString
 
     -- | == Constraints
-  , Pred
-  , pattern ClassPred, pattern EqPred, pattern IrredPred, pattern ForAllPred
   , EqRel(..), FunDep, CtFlavour
   , Ct, CtLoc, CtEvidence, CtOrigin
   , QCInst
@@ -438,6 +446,10 @@ module GHC.TcPlugin.API
 
     -- | == The type-checking environment
   , TcGblEnv, TcLclEnv
+
+    -- | == Source locations
+  , GenLocated(..), Located, RealLocated
+  , unLoc, getLoc
 
     -- | == Pretty-printing
   , SDoc, Outputable(..)
@@ -491,22 +503,20 @@ import GHC.Core.TyCo.Rep
   ( Type, PredType, Kind
   , Coercion(..), CoercionHole(..)
   , UnivCoProvenance(..)
+#if MIN_VERSION_ghc(9,0,0)
+  , Mult
+  , mkInvisFunTyMany, mkInvisFunTysMany
+#elif MIN_VERSION_ghc(8,10,0)
+  , mkInvisFunTy, mkInvisFunTys
+#else
+  , mkFunTy, mkFunTys
+#endif
 #if MIN_VERSION_ghc(8,10,0)
-  , AnonArgFlag(..)
-  , mkVisFunTy, mkInvisFunTy, mkVisFunTys
   , mkPiTy
 #endif
   , mkPiTys
   , mkTyVarTy, mkTyVarTys
   , mkForAllTy, mkForAllTys
-  , mkFunTy
-#if MIN_VERSION_ghc(9,0,0)
-  , Mult
-  , mkFunTyMany
-  , mkScaledFunTy
-  , mkVisFunTyMany, mkVisFunTysMany
-  , mkInvisFunTyMany, mkInvisFunTysMany
-#endif
   )
 import GHC.Core.Type
   ( eqType, mkTyConTy, mkTyConApp, splitTyConApp_maybe
@@ -547,7 +557,11 @@ import qualified GHC.Tc.Utils.Monad
   as GHC
     ( traceTc, setCtLocM )
 import GHC.Tc.Utils.TcType
-  ( TcType, TcLevel )
+  ( TcType, TcLevel, MetaDetails, MetaInfo
+  , isSkolemTyVar, isMetaTyVar
+  )
+import GHC.Tc.Utils.TcMType
+  ( isFilledMetaTyVar_maybe, writeMetaTyVar )
 import GHC.Types.Id
   ( Id, mkLocalId )
 import GHC.Types.Name
@@ -555,6 +569,10 @@ import GHC.Types.Name
 import GHC.Types.Name.Occurrence
   ( OccName(..)
   , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
+  )
+import GHC.Types.SrcLoc
+  ( GenLocated(..), Located, RealLocated
+  , unLoc, getLoc
   )
 import GHC.Types.Unique
   ( Unique )
@@ -570,15 +588,19 @@ import GHC.Types.Unique.FM as UniqFM
 import GHC.Types.Unique.DFM
   ( UniqDFM, lookupUDFM, lookupUDFM_Directly, elemUDFM )
 import GHC.Types.Var
-  ( TcTyVar, EvVar
+  ( TyVar, CoVar, TcTyVar, EvVar
   , mkTyVar
   )
 import GHC.Utils.Outputable
   ( Outputable(..), SDoc
-#if !MIN_VERSION_ghc(8,10,0)
-  , panic
+#if !MIN_VERSION_ghc(9,2,0)
+  , panic, pprPanic
 #endif
   )
+#if MIN_VERSION_ghc(9,2,0)
+import GHC.Utils.Panic
+  ( panic, pprPanic )
+#endif
 #if MIN_VERSION_ghc(9,2,0)
 import GHC.Unit.Finder
   ( FindResult(..) )
@@ -849,30 +871,23 @@ mkTyFamAppReduction str role tc args ty =
 
 type UniqFM ty a = GHC.UniqFM a
 
-#endif
+#if MIN_VERSION_ghc(8,10,0)
 
-#if !MIN_VERSION_ghc(8,10,0)
+mkInvisFunTyMany :: Type -> Type -> Type
+mkInvisFunTyMany = mkInvisFunTy
 
--- | The non-dependent version of 'ArgFlag'.
--- See Note [AnonArgFlag]
--- Appears here partly so that it's together with its friends ArgFlag
--- and ForallVisFlag, but also because it is used in IfaceType, rather
--- early in the compilation chain
-data AnonArgFlag
-  = VisArg    -- ^ Used for @(->)@: an ordinary non-dependent arrow.
-              --   The argument is visible in source code.
-  | InvisArg  -- ^ Used for @(=>)@: a non-dependent predicate arrow.
-              --   The argument is invisible in source code.
-  deriving stock (Eq, Ord)
+mkInvisFunTysMany :: [Type] -> Type -> Type
+mkInvisFunTysMany = mkInvisFunTys
+
+#else
 
 type Pred = PredTree
 
-mkVisFunTy, mkInvisFunTy :: Type -> Type -> Type
-mkVisFunTy   = mkFunTy
-mkInvisFunTy = mkFunTy
+mkInvisFunTyMany :: Type -> Type -> Type
+mkInvisFunTyMany = mkFunTy
 
-mkVisFunTys :: [Type] -> Type -> Type
-mkVisFunTys tys ty = foldr mkFunTy ty tys
+mkInvisFunTysMany :: [Type] -> Type -> Type
+mkInvisFunTysMany = mkFunTys
 
 mkPiTy :: TyCoBinder -> Type -> Type
 mkPiTy bndr ty = mkPiTys [bndr] ty
@@ -883,4 +898,5 @@ mkPrimEqPredRole Nominal          = mkPrimEqPred
 mkPrimEqPredRole Representational = mkReprPrimEqPred
 mkPrimEqPredRole Phantom          = panic "mkPrimEqPredRole phantom"
 
+#endif
 #endif

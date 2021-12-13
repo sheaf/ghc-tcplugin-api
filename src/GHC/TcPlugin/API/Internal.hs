@@ -319,7 +319,7 @@ instance MonadTcPlugin ( TcPluginM Init ) where
 #ifdef HAS_REWRITING
       ( GHC.runTcPluginM . tcPluginInitM )
 #else
-      ( ( `GHC.runTcPluginM` ( error "tcPluginInit: cannot access EvBindsVar" ) ) . tcPluginInitM ) 
+      ( ( `GHC.runTcPluginM` ( error "tcPluginInit: cannot access EvBindsVar" ) ) . tcPluginInitM )
 #endif
 instance MonadTcPlugin ( TcPluginM Solve ) where
   liftTcPluginM  = TcPluginSolveM
