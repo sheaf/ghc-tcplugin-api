@@ -1,13 +1,29 @@
 
+# Version 0.7.0.0 (2021-12-31)
+
+- Re-export functions for dealing with type-level literals,
+  such as `mkNumLitTy` and `isStrLitTy`.
+
+- Re-export functions for splitting apart type applications, such as
+  `splitAppTy_maybe` and `tyConAppTyCon_maybe`.
+
+- Redefine and re-export `mkUncheckedIntExpr` for GHC versions prior to 9.0.
+
+- Re-export some basic types from `GHC.Types.Basic` such as `Arity`,
+  `PromotionFlag` and `Boxity`.
+
+- Re-export `GHC.Builtin.Names` and `GHC.Builin.Types.Prim`.
+
+- Provide `MonadThings` instances for `TcPluginM` monads.
+
 # Version 0.6.1.0 (2021-12-13)
 
 - Re-export various useful types and functions to deal with type and coercion variables.
 
 - Re-export a few types and functions to deal with source locations.
 
-- Remove some re-exports for constructing function types: only re-export `mkVisFunTyMany`
-  and `mkVisFunTysMany`, as these are the only functions that make sense across all
-  GHC versions.
+- Remove some re-exports for constructing function types, as not all functions make sense
+  across all GHC versions supported by the library.
 
 - Re-export `panic` and `pprPanic`.
 

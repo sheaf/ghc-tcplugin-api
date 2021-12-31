@@ -2,6 +2,7 @@
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingVia #-}
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GADTs #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -50,6 +51,7 @@ module GHC.TcPlugin.API.Internal
   , TcPluginM(..)
   , TcPluginErrorMessage(..)
   , TcPluginRewriter
+  , MonadThings(..)
   , askRewriteEnv
   , askDeriveds
   , askEvBinds
@@ -127,6 +129,13 @@ import qualified GHC.Tc.Types.Evidence
 import qualified GHC.Types.Unique.FM
   as GHC
     ( UniqFM )
+#if MIN_VERSION_ghc(9,1,0)
+import GHC.Types.TyThing
+  ( MonadThings(..) )
+#else
+import GHC.Driver.Types
+  ( MonadThings(..) )
+#endif
 
 -- ghc-tcplugin-api
 #ifndef HAS_REWRITING
@@ -528,6 +537,10 @@ mkTcPluginErrorTy msg = do
     errorMsgTy :: GHC.PredType
     errorMsgTy = interpretErrorMessage builtinDefs msg
   pure $ GHC.mkTyConApp typeErrorTyCon [ GHC.constraintKind, errorMsgTy ]
+
+instance ( Monad (TcPluginM s), MonadTcPlugin (TcPluginM s) )
+      => MonadThings (TcPluginM s) where
+  lookupThing = unsafeLiftTcM . lookupThing
 
 --------------------------------------------------------------------------------
 -- Private types and functions.

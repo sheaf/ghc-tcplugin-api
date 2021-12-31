@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.6.1.0
+version:        0.7.0.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
@@ -35,7 +35,7 @@ library
     base
       >= 4.13.0 && < 4.18,
     ghc
-      >= 8.8   && < 9.5,
+      >= 8.8    && < 9.5,
     transformers
       >= 0.5    && < 0.6,
 
@@ -59,7 +59,10 @@ library
     GHC.TcPlugin.API.Internal
 
   reexported-modules:
-      GHC.Core.Make
+      GHC.Builtin.Names
+    , GHC.Builtin.Types
+    , GHC.Builtin.Types.Prim
+    , GHC.Core.Make
     , GHC.Plugins
     , GHC.Types.Unique.DFM
     , GHC.Types.Unique.FM
@@ -84,6 +87,7 @@ library
 
         , PrelNames  as GHC.Builtin.Names
         , TysWiredIn as GHC.Builtin.Types
+        , TysPrim    as GHC.Builtin.Types.Prim
 
         , CoreSyn    as GHC.Core
         , CoAxiom    as GHC.Core.Coercion.Axiom
@@ -114,7 +118,9 @@ library
         , TcType     as GHC.Tc.Utils.TcType
         , TcMType    as GHC.Tc.Utils.TcMType
 
+        , BasicTypes as GHC.Types.Basic
         , Id         as GHC.Types.Id
+        , Literal    as GHC.Types.Literal
         , Name       as GHC.Types.Name
         , OccName    as GHC.Types.Name.Occurrence
         , SrcLoc     as GHC.Types.SrcLoc

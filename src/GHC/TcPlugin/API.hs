@@ -276,15 +276,17 @@ module GHC.TcPlugin.API
     -- the values for the class methods.
     --
     -- The class dictionary constructor can be obtained using 'classDataCon'.
-    -- Functions from "GHC.Core.Make", re-exported here, will be useful for
-    -- constructing the necessary terms.
+    -- Functions from "GHC.Core.Make", which is re-exported by this library,
+    -- will be useful for constructing the necessary terms
     --
     -- For instance, we can apply the class data constructor using 'mkCoreConApps'.
     -- Remember that the type-level arguments (the typeclass variables) come first,
     -- before the actual evidence term (the class dictionary expression).
 
   , classDataCon
-  , module GHC.Core.Make
+#if !MIN_VERSION_ghc(9,0,0)
+  , mkUncheckedIntExpr
+#endif
 
     -- | ==== Class instances
 
@@ -369,11 +371,18 @@ module GHC.TcPlugin.API
   , isTyVarTy, getTyVar_maybe
   , TcType, TcTyVar, Unique, Kind
 
+    -- ** Type literals (natural numbers, type-level strings)
+  , mkNumLitTy, isNumLitTy
+  , mkStrLitTy, isStrLitTy
+
     -- ** Creating and decomposing applications
-  , mkTyConTy, mkTyConApp, splitTyConApp_maybe
-  , mkAppTy, mkAppTys
+  , mkTyConTy, mkTyConApp, mkAppTy, mkAppTys
+  , splitTyConApp_maybe
+  , tyConAppTyConPicky_maybe, tyConAppTyCon_maybe
+  , splitAppTy_maybe
 
     -- ** Function types
+  , mkVisFunTyMany, mkVisFunTysMany
   , mkInvisFunTyMany, mkInvisFunTysMany
   , mkForAllTy, mkForAllTys
   , mkPiTy, mkPiTys
@@ -417,7 +426,8 @@ module GHC.TcPlugin.API
     --
     -- This allows plugins to directly refer to e.g. the promoted data constructor
     -- 'True' without having to look up its name.
-  , module GHC.Builtin.Types
+    --
+    -- Refer to "GHC.Builtin.Names", "GHC.Builtin.Types" and "GHC.Builtin.Types.Prim".
 
     -- * GHC types
 
@@ -425,8 +435,13 @@ module GHC.TcPlugin.API
 
     -- | = END OF API DOCUMENTATION, RE-EXPORTS FOLLOW
 
+    -- | == Some basic types
+
+  , module GHC.Types.Basic
+
     -- | == Names
   , Name, OccName, TyThing, TcTyThing
+  , MonadThings(..)
   , Class(classTyCon), DataCon, TyCon, Id
   , FastString
 
@@ -441,7 +456,7 @@ module GHC.TcPlugin.API
   , Coercion, Role(..), UnivCoProvenance
   , CoercionHole(..)
   , EvBind, EvTerm(EvExpr), EvVar, EvExpr, EvBindsVar
-  , Expr(Var, Type, Coercion), CoreBndr
+  , Expr(Var, Type, Coercion), CoreBndr, CoreExpr
   , TcEvDest(..)
 
     -- | == The type-checking environment
@@ -460,9 +475,14 @@ module GHC.TcPlugin.API
 -- ghc
 import GHC
   ( TyThing(..) )
+#if !MIN_VERSION_ghc(9,0,0)
 import GHC.Builtin.Types
+  ( intDataCon )
+import GHC.Builtin.Types.Prim
+  ( intPrimTy )
+#endif
 import GHC.Core
-  ( CoreBndr, Expr(..) )
+  ( CoreBndr, CoreExpr, Expr(..) )
 import GHC.Core.Class
   ( Class(..), FunDep )
 import GHC.Core.Coercion
@@ -482,7 +502,10 @@ import GHC.Core.FamInstEnv
   ( FamInstEnv )
 import GHC.Core.InstEnv
   ( InstEnvs(..) )
+#if !MIN_VERSION_ghc(9,0,0)
 import GHC.Core.Make
+  ( mkCoreConApps )
+#endif
 import GHC.Core.Predicate
   ( EqRel(..)
 #if MIN_VERSION_ghc(8,10,0)
@@ -505,8 +528,10 @@ import GHC.Core.TyCo.Rep
   , UnivCoProvenance(..)
 #if MIN_VERSION_ghc(9,0,0)
   , Mult
+  , mkVisFunTyMany, mkVisFunTysMany
   , mkInvisFunTyMany, mkInvisFunTysMany
 #elif MIN_VERSION_ghc(8,10,0)
+  , mkVisFunTy, mkVisFunTys
   , mkInvisFunTy, mkInvisFunTys
 #else
   , mkFunTy, mkFunTys
@@ -520,8 +545,11 @@ import GHC.Core.TyCo.Rep
   )
 import GHC.Core.Type
   ( eqType, mkTyConTy, mkTyConApp, splitTyConApp_maybe
+  , splitAppTy_maybe
+  , tyConAppTyConPicky_maybe, tyConAppTyCon_maybe
   , mkAppTy, mkAppTys, isTyVarTy, getTyVar_maybe
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
+  , mkNumLitTy, isNumLitTy, mkStrLitTy, isStrLitTy
 #if MIN_VERSION_ghc(9,0,0)
   , pattern One, pattern Many
 #endif
@@ -562,8 +590,16 @@ import GHC.Tc.Utils.TcType
   )
 import GHC.Tc.Utils.TcMType
   ( isFilledMetaTyVar_maybe, writeMetaTyVar )
+import GHC.Types.Basic
+  ( Arity, PromotionFlag(..), isPromoted
+  , Boxity(..), TupleSort(..)
+  )
 import GHC.Types.Id
   ( Id, mkLocalId )
+#if !MIN_VERSION_ghc(9,0,0)
+import GHC.Types.Literal
+  ( Literal(..), LitNumType(..) )
+#endif
 import GHC.Types.Name
   ( Name )
 import GHC.Types.Name.Occurrence
@@ -871,23 +907,32 @@ mkTyFamAppReduction str role tc args ty =
 
 type UniqFM ty a = GHC.UniqFM a
 
+mkUncheckedIntExpr :: Integer -> CoreExpr
+mkUncheckedIntExpr i = mkCoreConApps intDataCon [Lit lit]
+  where
+    lit = LitNumber LitNumInt i intPrimTy
+
 #if MIN_VERSION_ghc(8,10,0)
 
-mkInvisFunTyMany :: Type -> Type -> Type
+mkInvisFunTyMany, mkVisFunTyMany :: Type -> Type -> Type
 mkInvisFunTyMany = mkInvisFunTy
+mkVisFunTyMany   = mkVisFunTy
 
-mkInvisFunTysMany :: [Type] -> Type -> Type
+mkInvisFunTysMany, mkVisFunTysMany :: [Type] -> Type -> Type
 mkInvisFunTysMany = mkInvisFunTys
+mkVisFunTysMany   = mkVisFunTys
 
 #else
 
 type Pred = PredTree
 
-mkInvisFunTyMany :: Type -> Type -> Type
+mkInvisFunTyMany, mkVisFunTyMany  :: Type -> Type -> Type
 mkInvisFunTyMany = mkFunTy
+mkVisFunTyMany   = mkFunTy
 
-mkInvisFunTysMany :: [Type] -> Type -> Type
+mkInvisFunTysMany, mkVisFunTysMany :: [Type] -> Type -> Type
 mkInvisFunTysMany = mkFunTys
+mkVisFunTysMany = mkFunTys
 
 mkPiTy :: TyCoBinder -> Type -> Type
 mkPiTy bndr ty = mkPiTys [bndr] ty
