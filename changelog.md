@@ -1,4 +1,15 @@
 
+# Version 0.7.1.0 (2022-01-04)
+
+- `newWanted` now always uses the `CtLoc` information that it is provided with,
+  as opposed to obtaining some information from the monadic environment.
+  This means you no longer need to wrap calls to `newWanted` in `setCtLocM`
+  to ensure that GHC reports the correct source span when reporting unsolved
+  Wanteds in error messages.
+
+- Remove the `newDerived` function, as Derived constraints are going to be
+  removed from GHC.
+
 # Version 0.7.0.0 (2021-12-31)
 
 - Re-export functions for dealing with type-level literals,

@@ -315,7 +315,7 @@ module GHC.TcPlugin.API
     --
     -- GHC 9.4 removes this flavour of constraints entirely, subsuming their uses into
     -- Wanted constraints.
-  , askDeriveds, newDerived
+  , askDeriveds
 
     -- ** Location information and 'CtLoc's
 
@@ -786,24 +786,23 @@ zonkCt = liftTcPluginM . GHC.zonkCt
 
 --------------------------------------------------------------------------------
 
--- | Create a new derived constraint.
+-- | Create a new Wanted constraint.
 --
 -- Requires a location (so that error messages can say where the constraint came from,
 -- what things were in scope at that point, etc), as well as the actual constraint (encoded as a type).
 newWanted :: MonadTcPluginWork m => CtLoc -> PredType -> m CtEvidence
-newWanted loc pty = liftTcPluginM $ GHC.newWanted loc pty
+newWanted loc pty =
+#if !HAS_REWRITING
+  -- On GHC 9.2 and below, 'newWanted' doesn't use the location information
+  -- that is passed to it, retrieving it from the 'TcM' environment instead.
+  -- https://gitlab.haskell.org/ghc/ghc/-/issues/20895
+  setCtLocM loc $
+#endif
+  liftTcPluginM $ GHC.newWanted loc pty
 
--- | Create a new derived constraint. See also 'newWanted'.
-newDerived :: MonadTcPluginWork m => CtLoc -> PredType -> m CtEvidence
-newDerived loc pty = liftTcPluginM $ GHC.newDerived loc pty
-
--- | Create a new given constraint.
+-- | Create a new Given constraint.
 --
--- Unlike 'newWanted' and 'newDerived', we need to supply evidence
--- for this constraint.
---
--- Use 'setCtLocM' to pass along the location information,
--- as only the 'CtOrigin' gets taken into account here.
+-- Unlike 'newWanted', we need to supply evidence for this constraint.
 newGiven :: CtLoc -> PredType -> EvExpr -> TcPluginM Solve CtEvidence
 newGiven loc pty evtm = do
 #if HAS_REWRITING
@@ -823,8 +822,7 @@ newGiven loc pty evtm = do
 rewriteEnvCtLoc :: RewriteEnv -> CtLoc
 rewriteEnvCtLoc = fe_loc
 
--- | Set the location information for a computation,
--- so that the constraint solver reports an error at the given location.
+-- | Set the location information for a computation.
 setCtLocM :: MonadTcPluginWork m => CtLoc -> m a -> m a
 setCtLocM loc = unsafeLiftThroughTcM ( GHC.setCtLocM loc )
 
