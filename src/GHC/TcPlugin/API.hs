@@ -1,3 +1,4 @@
+{-# LANGUAGE BlockArguments #-}
 {-# LANGUAGE CPP #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
@@ -239,6 +240,7 @@ module GHC.TcPlugin.API
     -- | == Some further functions for inspecting constraints
   , eqType
   , ctLoc, ctEvidence, ctFlavour, ctEqRel, ctOrigin
+  , ctEvLoc, ctEvFlavour, ctEvRole, ctEvEqRel
 
     -- ** Constraint evidence
 
@@ -360,6 +362,9 @@ module GHC.TcPlugin.API
     -- or import the GHC module "GHC.Types.Unique.FM" for a more complete API.
   , askRewriteEnv, rewriteEnvCtLoc, RewriteEnv
   , mkTyFamAppReduction, Reduction(..)
+
+    -- * Canonicalisation
+  , rewriteCtEv
 
     -- * Handling Haskell types
 
@@ -558,6 +563,14 @@ import GHC.Data.FastString
   ( FastString, fsLit )
 import qualified GHC.Tc.Plugin
   as GHC
+#if MIN_VERSION_ghc(9,2,0)
+import GHC.Tc.Solver.Interact
+  ( solveSimpleGivens )
+import GHC.Tc.Solver.Monad
+  ( runTcSWithEvBinds )
+import GHC.Tc.Solver.Rewrite
+  ( rewrite )
+#endif
 import GHC.Tc.Types
   ( TcTyThing(..), TcGblEnv(..), TcLclEnv(..)
 #if HAS_REWRITING
@@ -568,7 +581,8 @@ import GHC.Tc.Types
 import GHC.Tc.Types.Constraint
   ( Ct(..), CtLoc(..), CtEvidence(..), CtFlavour(..)
   , QCInst(..), TcEvDest(..)
-  , ctPred, ctLoc, ctEvidence, ctEvExpr
+  , ctPred, ctEvPred, ctLoc, ctEvidence, ctEvExpr
+  , ctEvLoc, ctEvFlavour, ctEvRole, ctEvEqRel
   , ctFlavour, ctEqRel, ctOrigin
   , bumpCtLocDepth
   , mkNonCanonical
@@ -898,6 +912,45 @@ mkTyFamAppReduction
   -> Reduction
 mkTyFamAppReduction str role tc args ty =
   Reduction ( mkPluginUnivCo str role ( mkTyConApp tc args ) ty ) ty
+
+--------------------------------------------------------------------------------
+
+-- | Rewrite a 'CtEvidence' with respect to some Given constraints,
+-- to canonicalise it.
+rewriteCtEv
+  :: [Ct] -- ^ Given constraints
+  -> CtEvidence
+  -> TcPluginM Solve Reduction
+rewriteCtEv givens ev = do
+#if MIN_VERSION_ghc(9,2,0)
+  evBindsVar <- askEvBinds
+  unsafeLiftTcM $ runTcSWithEvBinds evBindsVar do
+    -- Add back the Givens, so that they end up
+    -- in the inert set.
+    solveSimpleGivens givens
+#if MIN_VERSION_ghc(9,3,0)
+    rewrite ev ty
+#else
+    (xi, co) <- rewrite ev ty
+    return $ mkReduction co xi
+#endif
+#else
+    let rw_env = FE (ctEvLoc ev) (ctEvFlavour ev) (ctEvEqRel ev)
+        shim_env =
+         ShimRewriteEnv
+          { rewriters  = emptyUFM
+          , rewriteEnv = rw_env
+          , rewriteGivens = givens
+          }
+    ( mb_redn, _) <-
+      liftTcPluginM $ runRewritePluginM shim_env (rewrite_one ty)
+    return $
+      case mb_redn of
+        Nothing   -> mkReflRedn Nominal ty
+        Just redn -> redn
+#endif
+  where
+    ty = ctEvPred ev
 
 --------------------------------------------------------------------------------
 

@@ -20,7 +20,9 @@ module GHC.TcPlugin.API.Internal.Shim
   ( Reduction(..), mkReduction
   , TcPluginSolveResult(TcPluginContradiction, TcPluginOk, ..), TcPluginRewriteResult(..)
   , RewriteEnv(..)
-  , shimRewriter
+  , ShimRewriteEnv(..)
+  , shimRewriter, runRewritePluginM, rewrite_one
+  , mkReflRedn
   )
   where
 
