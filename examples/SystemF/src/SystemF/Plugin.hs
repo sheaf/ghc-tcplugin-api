@@ -64,7 +64,7 @@ data PluginDefs =
 
 findTypesModule :: MonadTcPlugin m => m Module
 findTypesModule = do
-  findResult <- findImportedModule ( mkModuleName "SystemF.Type" ) Nothing
+  findResult <- findImportedModule ( mkModuleName "SystemF.Type" ) NoPkgQual
   case findResult of
     Found _ res     -> pure res
     FoundMultiple _ -> error $ "SystemF.Plugin: found multiple modules named SystemF.Type in the current package."
@@ -123,7 +123,7 @@ pluginRewrite defs@( PluginDefs { applySubTyCon } ) =
   listToUFM
     [ ( applySubTyCon, rewriteSub defs ) ]
 
-rewriteSub :: PluginDefs -> [ Ct ] -> [ Type ] -> TcPluginM Rewrite TcPluginRewriteResult 
+rewriteSub :: PluginDefs -> [ Ct ] -> [ Type ] -> TcPluginM Rewrite TcPluginRewriteResult
 rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
   | [ kϕ, kψ, k, subst, subst_arg ] <- applySubArgs
   = do

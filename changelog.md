@@ -1,4 +1,14 @@
 
+# Version 0.8.0.0 (2022-07-07)
+
+- Compatibility for GHC 9.4.
+
+- Change API for `lookupImportedModule` to use `PkgQual` and `UnitId`
+  instead of `Maybe FastString`, with back-compatibility function `pkgQual_pkg`
+  for use with older module lookup functions.
+
+- Re-export `splitAppTys` and `unpackFS`.
+
 # Version 0.7.1.0 (2022-01-04)
 
 - `newWanted` now always uses the `CtLoc` information that it is provided with,

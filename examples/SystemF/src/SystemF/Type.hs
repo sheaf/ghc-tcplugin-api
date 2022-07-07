@@ -1,5 +1,6 @@
 {-# LANGUAGE Haskell2010 #-}
 
+{-# LANGUAGE CPP                      #-}
 {-# LANGUAGE DataKinds                #-}
 {-# LANGUAGE DerivingStrategies       #-}
 {-# LANGUAGE GADTs                    #-}
@@ -20,6 +21,10 @@ module SystemF.Type where
 -- base
 import qualified Data.Kind as Hs
   ( Type )
+#if MIN_VERSION_ghc(9,4,0)
+import Data.Type.Equality
+  ( type (~) )
+#endif
 import Prelude
   ( Show(..), ($) )
 import qualified Prelude as Hs
@@ -150,7 +155,7 @@ data instance Sing (k :: Kind) where
 infixr 0 :%->
 data instance Sing (a :: Type kϕ k) where
   SLitTy  :: ( x ~ 'LitTy @a ) => Sing x
-  (:%->)  :: Sing a -> Sing a -> Sing (a :-> b) 
+  (:%->)  :: Sing a -> Sing a -> Sing (a :-> b)
   SVarTy  :: forall kϕ k (i :: KIdx kϕ k ). Sing i -> Sing (VarTy i)
   SForall :: Sing a -> Sing (Forall a)
 

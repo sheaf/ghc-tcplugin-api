@@ -347,12 +347,9 @@ instance MonadTcPlugin ( TcPluginM Solve ) where
       ->
         GHC.unsafeTcPluginTcM $ runInTcM
 #ifdef HAS_REWRITING
+  -- (no deriveds)
           ( GHC.runTcPluginM
-#ifdef HAS_DERIVEDS
-          . ( \ f -> f builtinDefs evBinds deriveds )
-#else
           . ( \ f -> f builtinDefs evBinds )
-#endif
           . tcPluginSolveM )
 #else
           ( ( `GHC.runTcPluginM` evBinds )
@@ -419,22 +416,14 @@ mkTcPlugin ( TcPlugin
       pure ( TcPluginDefs { tcPluginBuiltinDefs, tcPluginUserDefs })
 
 #ifdef HAS_REWRITING
+  -- (no deriveds)
     adaptUserSolve :: ( userDefs -> TcPluginSolver )
                    -> TcPluginDefs userDefs
-                   -> GHC.EvBindsVar
                    -> GHC.TcPluginSolver
     adaptUserSolve userSolve ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs } )
-     evBindsVar
-#ifdef HAS_DERIVEDS
-      = \ givens deriveds wanteds -> do
-        tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds )
-          tcPluginBuiltinDefs evBindsVar deriveds
-#else
-      = \ givens _deriveds wanteds -> do
+      = \ evBindsVar givens wanteds -> do
         tcPluginSolveM ( userSolve tcPluginUserDefs givens wanteds )
           tcPluginBuiltinDefs evBindsVar
-#endif
-
     adaptUserRewrite :: ( userDefs -> GHC.UniqFM GHC.TyCon TcPluginRewriter )
                      -> TcPluginDefs userDefs -> GHC.UniqFM GHC.TyCon GHC.TcPluginRewriter
     adaptUserRewrite userRewrite ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs })

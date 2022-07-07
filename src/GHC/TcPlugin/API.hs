@@ -3,6 +3,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE UndecidableInstances #-}
 
@@ -98,8 +99,9 @@ module GHC.TcPlugin.API
 
     -- | Use these functions to lookup a module,
     -- from the current package or imported packages.
-  , findImportedModule, fsLit, mkModuleName
-  , Module, ModuleName, FindResult(..)
+  , findImportedModule, fsLit, unpackFS, mkModuleName
+  , unitIdFS, stringToUnitId, pkgQual_pkg
+  , Module, ModuleName, FindResult(..), UnitId, PkgQual(..)
 
     -- ** Names
 
@@ -379,7 +381,7 @@ module GHC.TcPlugin.API
   , mkTyConTy, mkTyConApp, mkAppTy, mkAppTys
   , splitTyConApp_maybe
   , tyConAppTyConPicky_maybe, tyConAppTyCon_maybe
-  , splitAppTy_maybe
+  , splitAppTy_maybe, splitAppTys
 
     -- ** Function types
   , mkVisFunTyMany, mkVisFunTysMany
@@ -545,7 +547,7 @@ import GHC.Core.TyCo.Rep
   )
 import GHC.Core.Type
   ( eqType, mkTyConTy, mkTyConApp, splitTyConApp_maybe
-  , splitAppTy_maybe
+  , splitAppTy_maybe, splitAppTys
   , tyConAppTyConPicky_maybe, tyConAppTyCon_maybe
   , mkAppTy, mkAppTys, isTyVarTy, getTyVar_maybe
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
@@ -555,7 +557,7 @@ import GHC.Core.Type
 #endif
   )
 import GHC.Data.FastString
-  ( FastString, fsLit )
+  ( FastString, fsLit, unpackFS )
 import qualified GHC.Tc.Plugin
   as GHC
 import GHC.Tc.Types
@@ -606,6 +608,10 @@ import GHC.Types.Name.Occurrence
   ( OccName(..)
   , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
   )
+#if MIN_VERSION_ghc(9,3,0)
+import GHC.Types.PkgQual
+  ( PkgQual(..) )
+#endif
 import GHC.Types.SrcLoc
   ( GenLocated(..), Located, RealLocated
   , unLoc, getLoc
@@ -632,6 +638,9 @@ import GHC.Utils.Outputable
 #if !MIN_VERSION_ghc(9,2,0)
   , panic, pprPanic
 #endif
+#if !MIN_VERSION_ghc(9,3,0)
+  , (<+>), doubleQuotes, empty, text
+#endif
   )
 #if MIN_VERSION_ghc(9,2,0)
 import GHC.Utils.Panic
@@ -645,9 +654,14 @@ import GHC.Driver.Finder
   ( FindResult(..) )
 #endif
 import GHC.Unit.Module
-  ( mkModuleName )
+  ( UnitId, unitIdFS, stringToUnitId, mkModuleName )
+#if MIN_VERSION_ghc(9,5,0)
+import Language.Haskell.Syntax.Module.Name
+  ( ModuleName )
+#else
 import GHC.Unit.Module.Name
   ( ModuleName )
+#endif
 import GHC.Unit.Types
   ( Module )
 
@@ -676,13 +690,54 @@ tcPluginTrace a b = unsafeLiftTcM $ GHC.traceTc a b
 
 --------------------------------------------------------------------------------
 
+#if !MIN_VERSION_ghc(9,3,0)
+-- | Package-qualifier after renaming
+data PkgQual
+  = NoPkgQual       -- ^ No package qualifier
+  | ThisPkg  UnitId -- ^ Import from home-unit
+  | OtherPkg UnitId -- ^ Import from another unit
+  deriving stock ( Ord, Eq )
+
+instance Outputable PkgQual where
+  ppr = \case
+    NoPkgQual  -> empty
+    ThisPkg  u -> doubleQuotes (ppr u)
+    OtherPkg u -> doubleQuotes (ppr u)
+#endif
+
+-- | Compatibility function to convert a 'PkgQual' to @Maybe FastString@
+-- on older versions of GHC (9.2 and below).
+--
+-- On newer GHCs, this is the identity function.
+pkgQual_pkg :: PkgQual
+#if MIN_VERSION_ghc(9,3,0)
+            -> PkgQual
+#else
+            -> Maybe FastString
+#endif
+pkgQual_pkg pkg =
+#if MIN_VERSION_ghc(9,3,0)
+  pkg
+#else
+  case pkg of
+    NoPkgQual        -> Nothing
+    ThisPkg  this    ->
+      let fs = unitIdFS this
+      in if fs == fsLit "this"
+      then Just fs
+      else pprPanic "pkgQual_pkg: \'ThisPkg\' package name should be \"this\"" (text "pkg:" <+> ppr pkg)
+    OtherPkg unit_id -> Just $ unitIdFS unit_id
+#endif
+
 -- | Lookup a Haskell module from the given package.
 findImportedModule :: MonadTcPlugin m
                    => ModuleName -- ^ Module name, e.g. @"Data.List"@.
-                   -> Maybe FastString -- ^ Package name, e.g. @Just "base"@.
-                                       -- Use @Nothing@ for the current home package
+                   -> PkgQual -- ^ Package name, e.g. @Just "base"@.
+                              -- Use @Nothing@ for the current home package
                    -> m FindResult
-findImportedModule mod_name mb_pkg = liftTcPluginM $ GHC.findImportedModule mod_name mb_pkg
+findImportedModule mod_name pkg
+  = liftTcPluginM
+  $ GHC.findImportedModule mod_name (pkgQual_pkg pkg)
 
 -- | Obtain the full internal 'Name' (with its unique identifier, etc) from its 'OccName'.
 --
@@ -820,7 +875,12 @@ newGiven loc pty evtm = do
 -- so that newly emitted constraints can be given
 -- the same location information.
 rewriteEnvCtLoc :: RewriteEnv -> CtLoc
-rewriteEnvCtLoc = fe_loc
+rewriteEnvCtLoc =
+#if MIN_VERSION_ghc(9,3,0)
+  re_loc
+#else
+  fe_loc
+#endif
 
 -- | Set the location information for a computation.
 setCtLocM :: MonadTcPluginWork m => CtLoc -> m a -> m a
@@ -829,7 +889,7 @@ setCtLocM loc = unsafeLiftThroughTcM ( GHC.setCtLocM loc )
 -- | Use the 'RewriteEnv' to set the 'CtLoc' for a computation.
 setCtLocRewriteM :: TcPluginM Rewrite a -> TcPluginM Rewrite a
 setCtLocRewriteM ma = do
-  rewriteCtLoc <- fe_loc <$> askRewriteEnv
+  rewriteCtLoc <- rewriteEnvCtLoc <$> askRewriteEnv
   setCtLocM rewriteCtLoc ma
 
 --------------------------------------------------------------------------------

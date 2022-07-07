@@ -34,7 +34,7 @@ usecase using this library's interface. This can be particularly useful when usi
 
 ## Compatibility
 
-This library provides a unified interface that works across different GHC versions (starting from GHC 8.10),
+This library provides a unified interface that works across different GHC versions (starting from GHC 8.8),
 aiming to reduce the CPP burden imposed on authors of type-checking plugins.    
 
 We make use of GHC's new API for rewriting type-families in typechecker plugins,

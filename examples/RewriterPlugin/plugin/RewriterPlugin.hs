@@ -52,9 +52,9 @@ data PluginDefs =
     }
 
 -- Look-up a module in a package, using their names.
-findModule :: API.MonadTcPlugin m => String -> String -> m API.Module
-findModule pkg modName = do
-  findResult <- API.findImportedModule ( API.mkModuleName modName ) ( Just $ API.fsLit pkg )
+findModule :: API.MonadTcPlugin m => String -> m API.Module
+findModule modName = do
+  findResult <- API.findImportedModule ( API.mkModuleName modName ) API.NoPkgQual
   case findResult of
     API.Found _ res     -> pure res
     API.FoundMultiple _ -> error $ "RewriterPlugin: found multiple modules named " <> modName <> "."
@@ -63,7 +63,7 @@ findModule pkg modName = do
 -- Initialise plugin state.
 tcPluginInit :: API.TcPluginM API.Init PluginDefs
 tcPluginInit = do
-  defsModule       <- findModule "RewriterPlugin" "RewriterPlugin.Definitions"
+  defsModule       <- findModule "RewriterPlugin.Definitions"
   natType          <- fmap ( `API.mkTyConApp` [] ) . API.tcLookupTyCon   =<< API.lookupOrig defsModule ( API.mkTcOcc   "Nat"         )
   zeroTyCon        <- fmap API.promoteDataCon      . API.tcLookupDataCon =<< API.lookupOrig defsModule ( API.mkDataOcc "Zero"        )
   succTyCon        <- fmap API.promoteDataCon      . API.tcLookupDataCon =<< API.lookupOrig defsModule ( API.mkDataOcc "Succ"        )

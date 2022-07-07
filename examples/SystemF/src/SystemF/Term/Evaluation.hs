@@ -24,7 +24,7 @@ import SystemF.Term.Substitution
 import SystemF.Type
 
 --------------------------------------------------------------------------------
--- Reduction and evalaution of terms.
+-- Reduction and evaluation of terms.
 
 type Val :: Context kϕ -> Type kϕ k -> Hs.Type
 data Val ϕ a where
@@ -45,14 +45,14 @@ step = \case
 
 stepApp :: Term Empty a -> Term Empty (a :-> b) -> Maybe (Term Empty b)
 stepApp a = \case
-  g :$ b   -> (:$ a) <$> stepApp   b g 
-  g :@ s   -> (:$ a) <$> stepTyApp s g 
+  g :$ b   -> (:$ a) <$> stepApp   b g
+  g :@ s   -> (:$ a) <$> stepTyApp s g
   LamE _ b -> Just $ subOne a b
 
 stepTyApp :: Sing a -> Term Empty (Forall ty) -> Maybe (Term Empty (SubOne a ty))
 stepTyApp t = \case
-  g :$ b  -> (:@ t) <$> stepApp   b g 
-  g :@ s  -> (:@ t) <$> stepTyApp s g 
+  g :$ b  -> (:@ t) <$> stepApp   b g
+  g :@ s  -> (:@ t) <$> stepTyApp s g
   TyLam s -> Just $ subOneT t s
 
 eval :: Term Empty a -> Val Empty a

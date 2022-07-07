@@ -137,10 +137,17 @@ import GHC.Driver.Finder
 import GHC.Driver.Session
   ( DynFlags )
 #endif
-import GHC.Utils.Panic
-  ( pgmErrorDoc )
+#if MIN_VERSION_ghc(9,5,0)
+import Language.Haskell.Syntax.Module.Name
+  ( moduleNameString )
+#else
 import GHC.Unit.Module.Name
   ( moduleNameString )
+#endif
+import GHC.Unit.Types
+  ( unitIdString )
+import GHC.Utils.Panic
+  ( pgmErrorDoc )
 import GHC.Tc.Plugin
   ( getTopEnv )
 import GHC.Types.Unique.FM
@@ -163,8 +170,7 @@ data QualifiedName (thing :: Type)
       -- | Name of the module in which the thing can be found.
     , module' :: ModuleName
       -- | Name of the package in which the module can be found.
-      -- Use 'Nothing' to signify the current home package.
-    , package :: Maybe FastString
+    , package :: PkgQual
     }
 
 -- | Type-level parameter to 'Wear' type family, for higher-kinded data.
@@ -312,7 +318,7 @@ instance ( Generic (f Named)
          res
     .  ( Coercible res ( Generically1 f Resolved ), MonadTcPlugin m )
     => Generically1 f Named -> m res
-  resolve_names dat
+  resolve_names ( Generically1 dat )
     =  ( `evalStateT` emptyModules )
     $  coerce . to @(f Resolved)
    <$> gtraverseC @ResolveName resolveName ( from dat )
@@ -342,8 +348,8 @@ resolveName :: forall (thing :: Type) m
             => MonadTcPlugin m
             => Wear Named thing
             -> StateT ImportedModules m ( Wear Resolved thing )
-resolveName (Qualified str mod_name mb_pkg) = do
-  md <- lookupModule mb_pkg mod_name
+resolveName (Qualified str mod_name pkg) = do
+  md <- lookupModule pkg mod_name
   nm <- lift $ lookupOrig md
                  (mkOccName
 #if !MIN_VERSION_ghc(9,0,0)
@@ -363,41 +369,55 @@ resolveName (Qualified str mod_name mb_pkg) = do
 
 data ImportedModules
   = ImportedModules
-    { home_modules :: UniqFM ModuleName Module
-    , pkg_modules  :: UniqFM FastString ( UniqFM ModuleName Module )
+    { home_modules      :: UniqFM ModuleName Module
+    , this_pkg_modules  :: UniqFM UnitId ( UniqFM ModuleName Module )
+    , other_pkg_modules :: UniqFM UnitId ( UniqFM ModuleName Module )
     }
 
 emptyModules :: ImportedModules
-emptyModules = ImportedModules emptyUFM emptyUFM
+emptyModules =
+  ImportedModules
+    { home_modules      = emptyUFM
+    , this_pkg_modules  = emptyUFM
+    , other_pkg_modules = emptyUFM
+    }
 
-lookupCachedModule :: Monad m => Maybe FastString -> ModuleName -> StateT ImportedModules m (Maybe Module)
-lookupCachedModule Nothing    mod_name
+lookupCachedModule :: Monad m => PkgQual -> ModuleName -> StateT ImportedModules m (Maybe Module)
+lookupCachedModule NoPkgQual    mod_name
   =   ( `lookupUFM` mod_name )
   .   home_modules
   <$> get
-lookupCachedModule (Just pkg) mod_name
+lookupCachedModule (ThisPkg pkg) mod_name
   =   ( ( `lookupUFM` mod_name ) =<< )
   .   ( `lookupUFM` pkg )
-  .   pkg_modules
+  .   this_pkg_modules
+  <$> get
+lookupCachedModule (OtherPkg pkg) mod_name
+  =   ( ( `lookupUFM` mod_name ) =<< )
+  .   ( `lookupUFM` pkg )
+  .   other_pkg_modules
   <$> get
 
-insertCachedModule :: Monad m => Maybe FastString -> ModuleName -> Module -> StateT ImportedModules m ()
-insertCachedModule Nothing    mod_name md = do
+insertCachedModule :: Monad m => PkgQual -> ModuleName -> Module -> StateT ImportedModules m ()
+insertCachedModule NoPkgQual    mod_name md = do
   mods@( ImportedModules { home_modules = prev } ) <- get
   put $ mods { home_modules = addToUFM prev mod_name md }
-insertCachedModule (Just pkg) mod_name md = do
-  mods@( ImportedModules { pkg_modules = prev } ) <- get
-  put $ mods { pkg_modules = addToUFM_C plusUFM prev pkg (unitUFM mod_name md) }
+insertCachedModule (ThisPkg pkg) mod_name md = do
+  mods@( ImportedModules { this_pkg_modules = prev } ) <- get
+  put $ mods { this_pkg_modules = addToUFM_C plusUFM prev pkg (unitUFM mod_name md) }
+insertCachedModule (OtherPkg pkg) mod_name md = do
+  mods@( ImportedModules { other_pkg_modules = prev } ) <- get
+  put $ mods { other_pkg_modules = addToUFM_C plusUFM prev pkg (unitUFM mod_name md) }
 
-lookupModule :: MonadTcPlugin m => Maybe FastString -> ModuleName -> StateT ImportedModules m Module
-lookupModule mb_pkg mod_name = do
-  cachedResult <- lookupCachedModule mb_pkg mod_name
+lookupModule :: MonadTcPlugin m => PkgQual -> ModuleName -> StateT ImportedModules m Module
+lookupModule pkg mod_name = do
+  cachedResult <- lookupCachedModule pkg mod_name
   case cachedResult of
     Just res -> do
-      insertCachedModule mb_pkg mod_name res
+      insertCachedModule pkg mod_name res
       pure res
     Nothing -> do
-      findResult <- lift $ findImportedModule mod_name mb_pkg
+      findResult <- lift $ findImportedModule mod_name pkg
       case findResult of
         Found _ res
           -> pure res
@@ -417,9 +437,10 @@ lookupModule mb_pkg mod_name = do
             err_doc
   where
     pkg_name, mod_str :: String
-    pkg_name = case mb_pkg of
-      Just pkg -> "package " <> show pkg
-      Nothing  -> "home package"
+    pkg_name = case pkg of
+      NoPkgQual     -> "home package"
+      ThisPkg unit  -> "home-unit package " <> unitIdString unit
+      OtherPkg unit -> "other unit package" <> unitIdString unit
     mod_str = moduleNameString mod_name
 
 --------------------------------------------------------------------------------
@@ -470,5 +491,4 @@ instance c a b => GTraversableC c (Rec0 a) (Rec0 b) where
 -- Generic instances can be derived for type constructors via
 -- @'Generically1' F@ using @-XDerivingVia@.
 newtype Generically1 (f :: k -> Type) (a :: k) = Generically1 ( f a )
-  deriving newtype Generic
 #endif
