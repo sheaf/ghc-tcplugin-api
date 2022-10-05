@@ -511,7 +511,7 @@ rewrite_exact_fam_app tc tys = do
           | fr `eqCanRewriteFR` (flavour, eq_rel)
           , let
               redn :: Reduction
-              redn = Reduction (mkSymCo co) xi -- inerts use a different orientation in GHC 9.0 and 9.2
+              redn = Reduction (mkSymCoOnGHC92 co) xi
           -> finish True (homogenise $ downgradeRedn role' inert_role redn)
           where
             inert_role      = eqRelRole inert_eq_rel
@@ -531,12 +531,25 @@ rewrite_exact_fam_app tc tys = do
       when (use_cache && eq_rel == NomEq && flavour /= Derived) $
         liftTcS $
           extendFamAppCache tc tys
-            ( mkSymCo final_co, final_xi ) -- different orientation in GHC 9.0 and 9.2
+            ( mkSymCoOnGHC92 final_co, final_xi )
 #if !MIN_VERSION_ghc(9,2,0)
             flavour
 #endif
       return final_redn
     {-# INLINE finish #-}
+
+-- On GHC 9.2, lookupFamAppCache and matchFam
+-- use a coercion that goes from right to left.
+-- On GHC 9.0 (and GHC 9.4 and above), the coercions
+-- always go from left to right.
+-- (Recall: this module is only used for GHC 9.2 and below.)
+mkSymCoOnGHC92 :: Coercion -> Coercion
+mkSymCoOnGHC92 co =
+#if MIN_VERSION_ghc(9,2,0)
+  mkSymCo co
+#else
+  co
+#endif
 
 -- Returned coercion is output ~r input, where r is the role in the RewriteM monad
 -- See Note [How to normalise a family application]
@@ -551,19 +564,7 @@ try_to_reduce tc tys mb_rewriter = do
   forM result downgrade
     where
       mkRed :: Maybe (Coercion, Type) -> Maybe Reduction
-      mkRed = fmap $ \ (co, ty) ->
-        Reduction
-        -- On GHC 9.2, lookupFamAppCache and matchFam
-        -- use a coercion that goes from right to left.
-        -- On GHC 9.0 (and GHC 9.4 and above), the coercions
-        -- always go from left to right.
-        -- (Recall: this module is only used for GHC 9.2 and below.)
-#if MIN_VERSION_ghc(9,2,0)
-          (mkSymCo co)
-#else
-          co
-#endif
-          ty
+      mkRed = fmap $ \ (co, ty) -> Reduction (mkSymCoOnGHC92 co) ty
       downgrade :: Reduction -> RewriteM Reduction
       downgrade redn@(Reduction co xi) = do
         eq_rel <- getEqRel

@@ -1,12 +1,17 @@
+# Version 0.8.3.0 (2022-10-05)
+
+- Bugfix for the GHC 9.0 rewriter plugin compatibility shim:
+  fix coercion orientations in family application cache
+
 # Version 0.8.2.0 (2022-10-05)
 
 - Bugfix for the GHC 9.0 rewriter plugin compatibility shim:
-  fix coercion orientations.
+  fix coercion orientations in family rewriting.
 
 # Version 0.8.1.0 (2022-10-05)
 
 - Bugfix for the GHC 9.2 rewriter plugin compatibility shim:
-  fix coercion orientations.
+  fix coercion orientations in family rewriting.
 
 # Version 0.8.0.0 (2022-07-07)
 
