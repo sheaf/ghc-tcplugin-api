@@ -551,7 +551,19 @@ try_to_reduce tc tys mb_rewriter = do
   forM result downgrade
     where
       mkRed :: Maybe (Coercion, Type) -> Maybe Reduction
-      mkRed = fmap $ \ (co, ty) -> Reduction (mkSymCo co) ty
+      mkRed = fmap $ \ (co, ty) ->
+        Reduction
+        -- On GHC 9.2, lookupFamAppCache and matchFam
+        -- use a coercion that goes from right to left.
+        -- On GHC 9.0 (and GHC 9.4 and above), the coercions
+        -- always go from left to right.
+        -- (Recall: this module is only used for GHC 9.2 and below.)
+#if MIN_VERSION_ghc(9,2,0)
+          (mkSymCo co)
+#else
+          co
+#endif
+          ty
       downgrade :: Reduction -> RewriteM Reduction
       downgrade redn@(Reduction co xi) = do
         eq_rel <- getEqRel
