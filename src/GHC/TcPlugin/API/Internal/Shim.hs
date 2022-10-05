@@ -525,7 +525,7 @@ rewrite_exact_fam_app tc tys = do
     finish :: Bool -> Reduction -> RewriteM Reduction
     finish use_cache (Reduction co xi) = do
       Reduction fully_co fully <- bumpDepth $ rewrite_one xi
-      let final_redn@(Reduction final_co final_xi) = Reduction (fully_co `mkTcTransCo` co) fully
+      let final_redn@(Reduction final_co final_xi) = Reduction (co `mkTcTransCo` fully_co) fully
       eq_rel <- getEqRel
       flavour <- getFlavour
       when (use_cache && eq_rel == NomEq && flavour /= Derived) $
@@ -551,7 +551,7 @@ try_to_reduce tc tys mb_rewriter = do
   forM result downgrade
     where
       mkRed :: Maybe (Coercion, Type) -> Maybe Reduction
-      mkRed = fmap $ uncurry Reduction
+      mkRed = fmap $ \ (co, ty) -> Reduction (mkSymCo co) ty
       downgrade :: Reduction -> RewriteM Reduction
       downgrade redn@(Reduction co xi) = do
         eq_rel <- getEqRel
