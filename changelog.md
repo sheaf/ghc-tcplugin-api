@@ -1,3 +1,11 @@
+# Version 0.9.0.0 (2023-01-24)
+
+- Add support for GHC 9.6 and `transformers` 0.6.
+
+- The `One` and `Many` pattern synonyms are now `OneTy` and `ManyTy`.
+
+- Use `mkInvisFunTy`/`mkInvisFunTys` instead of `mkInvisFunTyMany`/`mkInvisFunTysMany`.
+
 # Version 0.8.3.0 (2022-10-05)
 
 - Bugfix for the GHC 9.0 rewriter plugin compatibility shim:

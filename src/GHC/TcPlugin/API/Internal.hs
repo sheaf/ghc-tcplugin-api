@@ -95,7 +95,7 @@ import qualified GHC.Core.TyCo.Rep
     ( PredType, Type(..), TyLit(..) )
 import qualified GHC.Core.Type
   as GHC
-    ( mkTyConApp, tcTypeKind )
+    ( mkTyConApp, typeKind )
 import qualified GHC.Data.FastString
   as GHC
     ( fsLit )
@@ -566,7 +566,7 @@ interpretErrorMessage ( BuiltinDefs { .. } ) = go
     go ( Txt str ) =
       GHC.mkTyConApp textTyCon [ GHC.LitTy . GHC.StrTyLit . GHC.fsLit $ str ]
     go ( PrintType ty ) =
-      GHC.mkTyConApp showTypeTyCon [ GHC.tcTypeKind ty, ty ]
+      GHC.mkTyConApp showTypeTyCon [ GHC.typeKind ty, ty ]
         -- The kind gets ignored by GHC when printing the error message (see GHC.Core.Type.pprUserTypeErrorTy).
         -- However, including the wrong kind can lead to ASSERT failures, so we compute the kind and pass it.
     go ( msg1 :|: msg2 ) =

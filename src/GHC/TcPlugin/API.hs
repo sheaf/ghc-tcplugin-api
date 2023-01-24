@@ -385,12 +385,14 @@ module GHC.TcPlugin.API
 
     -- ** Function types
   , mkVisFunTyMany, mkVisFunTysMany
-  , mkInvisFunTyMany, mkInvisFunTysMany
+  , mkInvisFunTy, mkInvisFunTys
   , mkForAllTy, mkForAllTys
   , mkPiTy, mkPiTys
 
+
 #if MIN_VERSION_ghc(9,0,0)
-  , Mult, pattern One, pattern Many
+  , Mult
+  , pattern OneTy, pattern ManyTy
 #endif
 
     -- ** Zonking
@@ -524,6 +526,10 @@ import GHC.Core.Reduction
 #endif
 import GHC.Core.TyCon
   ( TyCon(..) )
+#if MIN_VERSION_ghc(9,6,0)
+import GHC.Core.TyCo.Compare
+  ( eqType )
+#endif
 import GHC.Core.TyCo.Rep
   ( Type, PredType, Kind
   , Coercion(..), CoercionHole(..)
@@ -531,7 +537,11 @@ import GHC.Core.TyCo.Rep
 #if MIN_VERSION_ghc(9,0,0)
   , Mult
   , mkVisFunTyMany, mkVisFunTysMany
+#if MIN_VERSION_ghc(9,6,0)
+  , mkInvisFunTy, mkInvisFunTys
+#else
   , mkInvisFunTyMany, mkInvisFunTysMany
+#endif
 #elif MIN_VERSION_ghc(8,10,0)
   , mkVisFunTy, mkVisFunTys
   , mkInvisFunTy, mkInvisFunTys
@@ -546,13 +556,18 @@ import GHC.Core.TyCo.Rep
   , mkForAllTy, mkForAllTys
   )
 import GHC.Core.Type
-  ( eqType, mkTyConTy, mkTyConApp, splitTyConApp_maybe
+  ( mkTyConTy, mkTyConApp, splitTyConApp_maybe
   , splitAppTy_maybe, splitAppTys
   , tyConAppTyConPicky_maybe, tyConAppTyCon_maybe
   , mkAppTy, mkAppTys, isTyVarTy, getTyVar_maybe
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
   , mkNumLitTy, isNumLitTy, mkStrLitTy, isStrLitTy
-#if MIN_VERSION_ghc(9,0,0)
+#if !MIN_VERSION_ghc(9,6,0)
+  , eqType
+#endif
+#if MIN_VERSION_ghc(9,6,0)
+  , pattern OneTy, pattern ManyTy
+#elif MIN_VERSION_ghc(9,0,0)
   , pattern One, pattern Many
 #endif
   )
@@ -664,6 +679,10 @@ import GHC.Unit.Module.Name
 #endif
 import GHC.Unit.Types
   ( Module )
+#if MIN_VERSION_ghc(9,0,0) && !MIN_VERSION_ghc(9,5,0)
+import GHC.Utils.Misc
+  ( HasDebugCallStack )
+#endif
 
 -- transformers
 import Control.Monad.IO.Class
@@ -687,6 +706,20 @@ tcPluginTrace :: MonadTcPlugin m
               -> SDoc   -- ^ Formatted document to print (use the 'ppr' pretty-printing function to obtain an 'SDoc' from any 'Outputable')
               -> m ()
 tcPluginTrace a b = unsafeLiftTcM $ GHC.traceTc a b
+
+--------------------------------------------------------------------------------
+
+#if MIN_VERSION_ghc(9,0,0) && !MIN_VERSION_ghc(9,5,0)
+pattern OneTy, ManyTy :: Mult
+pattern OneTy = One
+pattern ManyTy = Many
+
+mkInvisFunTy :: HasDebugCallStack => Type -> Type -> Type
+mkInvisFunTy = mkInvisFunTyMany
+
+mkInvisFunTys :: HasDebugCallStack => [Type] -> Type -> Type
+mkInvisFunTys = mkInvisFunTysMany
+#endif
 
 --------------------------------------------------------------------------------
 
@@ -972,24 +1005,22 @@ mkUncheckedIntExpr i = mkCoreConApps intDataCon [Lit lit]
 
 #if MIN_VERSION_ghc(8,10,0)
 
-mkInvisFunTyMany, mkVisFunTyMany :: Type -> Type -> Type
-mkInvisFunTyMany = mkInvisFunTy
-mkVisFunTyMany   = mkVisFunTy
+mkVisFunTyMany :: Type -> Type -> Type
+mkVisFunTyMany  = mkVisFunTy
 
-mkInvisFunTysMany, mkVisFunTysMany :: [Type] -> Type -> Type
-mkInvisFunTysMany = mkInvisFunTys
-mkVisFunTysMany   = mkVisFunTys
+mkVisFunTysMany :: [Type] -> Type -> Type
+mkVisFunTysMany = mkVisFunTys
 
 #else
 
 type Pred = PredTree
 
-mkInvisFunTyMany, mkVisFunTyMany  :: Type -> Type -> Type
-mkInvisFunTyMany = mkFunTy
-mkVisFunTyMany   = mkFunTy
+mkInvisFunTy, mkVisFunTyMany  :: Type -> Type -> Type
+mkInvisFunTy   = mkFunTy
+mkVisFunTyMany = mkFunTy
 
-mkInvisFunTysMany, mkVisFunTysMany :: [Type] -> Type -> Type
-mkInvisFunTysMany = mkFunTys
+mkInvisFunTys, mkVisFunTysMany :: [Type] -> Type -> Type
+mkInvisFunTys   = mkFunTys
 mkVisFunTysMany = mkFunTys
 
 mkPiTy :: TyCoBinder -> Type -> Type
