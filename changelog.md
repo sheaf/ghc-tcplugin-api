@@ -1,3 +1,9 @@
+# Version 0.10.0.0 (2023-02-28)
+
+- Introduce `resolveImport`, and make `PkgQual` opaque.
+- Rename `tcRewriterWanteds` to `tcRewriterNewWanteds`
+  (bringing it in line with nomenclature in ghc 9.4).
+
 # Version 0.9.0.0 (2023-01-24)
 
 - Add support for GHC 9.6 and `transformers` 0.6.

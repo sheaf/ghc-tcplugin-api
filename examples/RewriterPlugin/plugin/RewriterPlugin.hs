@@ -54,7 +54,9 @@ data PluginDefs =
 -- Look-up a module in a package, using their names.
 findModule :: API.MonadTcPlugin m => String -> m API.Module
 findModule modName = do
-  findResult <- API.findImportedModule ( API.mkModuleName modName ) API.NoPkgQual
+  let modlName = API.mkModuleName modName
+  pkgQual    <- API.resolveImport      modlName Nothing
+  findResult <- API.findImportedModule modlName pkgQual
   case findResult of
     API.Found _ res     -> pure res
     API.FoundMultiple _ -> error $ "RewriterPlugin: found multiple modules named " <> modName <> "."

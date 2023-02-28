@@ -3,6 +3,7 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE UndecidableInstances #-}
@@ -83,7 +84,10 @@ module GHC.TcPlugin.API
     --
     -- > lookupMyModule :: MonadTcPlugin m => m Module
     -- > lookupMyModule = do
-    -- >    findResult <- findImportedModule ( mkModuleName "MyModule" ) ( Just $ fsLit "my-pkg" )
+    -- >    let modlName = mkModuleName "MyModule"
+    -- >        pkgName  = Just $ fsLit "my-pkg"
+    -- >    pkgQual    <- resolveImport      modlName pkgName
+    -- >    findResult <- findImportedModule modlName pkgQual
     -- >    case findResult of
     -- >      Found _ myModule -> pure myModule
     -- >      _ -> error "MyPlugin couldn't find MyModule in my-pkg"
@@ -99,9 +103,9 @@ module GHC.TcPlugin.API
 
     -- | Use these functions to lookup a module,
     -- from the current package or imported packages.
-  , findImportedModule, fsLit, unpackFS, mkModuleName
-  , unitIdFS, stringToUnitId, pkgQual_pkg
-  , Module, ModuleName, FindResult(..), UnitId, PkgQual(..)
+  , findImportedModule, resolveImport, fsLit, unpackFS, mkModuleName
+  , unitIdFS, stringToUnitId, pkgQualToPkgName
+  , Module, ModuleName, FindResult(..), UnitId, PkgQual
 
     -- ** Names
 
@@ -624,8 +628,19 @@ import GHC.Types.Name.Occurrence
   , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
   )
 #if MIN_VERSION_ghc(9,3,0)
+import GHC
+  ( HscEnv )
 import GHC.Types.PkgQual
   ( PkgQual(..) )
+import GHC.Rename.Names
+  ( renamePkgQual )
+import GHC.Driver.Env
+  ( hsc_unit_env )
+import GHC.Unit.Module
+  ( unitIdString )
+#elif MIN_VERSION_ghc(9,1,0)
+import GHC.Data.FastString
+  ( NonDetFastString(NonDetFastString) )
 #endif
 import GHC.Types.SrcLoc
   ( GenLocated(..), Located, RealLocated
@@ -652,9 +667,6 @@ import GHC.Utils.Outputable
   ( Outputable(..), SDoc
 #if !MIN_VERSION_ghc(9,2,0)
   , panic, pprPanic
-#endif
-#if !MIN_VERSION_ghc(9,3,0)
-  , (<+>), doubleQuotes, empty, text
 #endif
   )
 #if MIN_VERSION_ghc(9,2,0)
@@ -723,54 +735,72 @@ mkInvisFunTys = mkInvisFunTysMany
 
 --------------------------------------------------------------------------------
 
-#if !MIN_VERSION_ghc(9,3,0)
--- | Package-qualifier after renaming
-data PkgQual
-  = NoPkgQual       -- ^ No package qualifier
-  | ThisPkg  UnitId -- ^ Import from home-unit
-  | OtherPkg UnitId -- ^ Import from another unit
-  deriving stock ( Ord, Eq )
-
-instance Outputable PkgQual where
-  ppr = \case
-    NoPkgQual  -> empty
-    ThisPkg  u -> doubleQuotes (ppr u)
-    OtherPkg u -> doubleQuotes (ppr u)
-#endif
-
--- | Compatibility function to convert a 'PkgQual' to @Maybe FastString@
--- on older versions of GHC (9.2 and below).
---
--- On newer GHCs, this is the identity function.
-pkgQual_pkg :: PkgQual
 #if MIN_VERSION_ghc(9,3,0)
-            -> PkgQual
+
+-- Use PkgQual from ghc itself
+
+#elif MIN_VERSION_ghc(9,1,0)
+
+newtype PkgQual = PkgQual (Maybe NonDetFastString)
+  deriving stock ( Eq, Ord )
+  deriving newtype ( Outputable )
+
+-- | INTERNAL: Unwrap 'PkgQual'
+getPkgQual :: PkgQual -> Maybe FastString
+getPkgQual (PkgQual Nothing)                       = Nothing
+getPkgQual (PkgQual (Just (NonDetFastString pkg))) = Just pkg
+
 #else
-            -> Maybe FastString
-#endif
-pkgQual_pkg pkg =
-#if MIN_VERSION_ghc(9,3,0)
-  pkg
-#else
-  case pkg of
-    NoPkgQual        -> Nothing
-    ThisPkg  this    ->
-      let fs = unitIdFS this
-      in if fs == fsLit "this"
-      then Just fs
-      else pprPanic "pkgQual_pkg: \'ThisPkg\' package name should be \"this\"" (text "pkg:" <+> ppr pkg)
-    OtherPkg unit_id -> Just $ unitIdFS unit_id
+
+newtype PkgQual = PkgQual (Maybe FastString)
+  deriving stock ( Eq, Ord )
+  deriving newtype ( Outputable )
+
+-- | INTERNAL: Unwrap 'PkgQual'
+getPkgQual :: PkgQual -> Maybe FastString
+getPkgQual (PkgQual mPkg) = mPkg
+
 #endif
 
--- | Lookup a Haskell module from the given package.
+-- | Get package name from package qualifier
+pkgQualToPkgName :: PkgQual -> Maybe String
+#if MIN_VERSION_ghc(9,3,0)
+pkgQualToPkgName NoPkgQual       = Nothing
+pkgQualToPkgName (ThisPkg  unit) = Just $ unitIdString unit
+pkgQualToPkgName (OtherPkg unit) = Just $ unitIdString unit
+#else
+pkgQualToPkgName = fmap unpackFS . getPkgQual
+#endif
+
+-- | Resolve import
+resolveImport :: MonadTcPlugin m
+              => ModuleName        -- ^ Module name to import from
+              -> Maybe FastString  -- ^ Optional package qualifier
+              -> m PkgQual
+#if MIN_VERSION_ghc(9,3,0)
+resolveImport mod_name mPkg = do
+  hscEnv <- getTopEnv
+  return $ renamePkgQual (hsc_unit_env hscEnv) mod_name mPkg
+#elif MIN_VERSION_ghc(9,1,0)
+resolveImport _mod_name mPkg = do
+  return $ PkgQual (NonDetFastString <$> mPkg)
+#else
+resolveImport _mod_name mPkg = do
+  return $ PkgQual mPkg
+#endif
+
+-- | Lookup a Haskell module, with an optional package qualifier.
 findImportedModule :: MonadTcPlugin m
-                   => ModuleName -- ^ Module name, e.g. @"Data.List"@.
-                   -> PkgQual -- ^ Package name, e.g. @Just "base"@.
-                              -- Use @Nothing@ for the current home package
+                   => ModuleName  -- ^ Module name, e.g. @"Data.List"@
+                   -> PkgQual     -- ^ Package qualifier. See 'resolveImport'
                    -> m FindResult
-findImportedModule mod_name pkg
-  = liftTcPluginM
-  $ GHC.findImportedModule mod_name (pkgQual_pkg pkg)
+#if MIN_VERSION_ghc(9,3,0)
+findImportedModule mod_name pkg = liftTcPluginM $
+    GHC.findImportedModule mod_name pkg
+#else
+findImportedModule mod_name pkg = liftTcPluginM $
+    GHC.findImportedModule mod_name (getPkgQual pkg)
+#endif
 
 -- | Obtain the full internal 'Name' (with its unique identifier, etc) from its 'OccName'.
 --
@@ -811,10 +841,10 @@ tcLookupId = liftTcPluginM . GHC.tcLookupId
 
 --------------------------------------------------------------------------------
 
-{-
+#if MIN_VERSION_ghc(9,3,0)
 getTopEnv :: MonadTcPlugin m => m HscEnv
 getTopEnv = liftTcPluginM GHC.getTopEnv
--}
+#endif
 
 -- | Obtain the current global and local type-checking environments.
 getEnvs :: MonadTcPlugin m => m ( TcGblEnv, TcLclEnv )

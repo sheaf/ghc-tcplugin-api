@@ -41,7 +41,9 @@ Before:
 >
 > findMyModule :: MonadTcPlugin m => m Module
 > findMyModule = do
->   findResult <- findImportedModule ( mkModuleName "MyModule" ) Nothing
+>   let modlName = mkModuleName "MyModule"
+>   pkgQual    <- resolveImport      modlName Nothing
+>   findResult <- findImportedModule modlName pkgQual
 >   case findResult of
 >     Found _ res -> pure res
 >     _           -> error $ "MyPlugin: could not find any module named MyModule."
@@ -116,9 +118,14 @@ import GHC.Generics
 import GHC.TypeLits
   ( TypeError, ErrorMessage(..) )
 
+-- containers
+import Data.Map
+  ( Map )
+import qualified Data.Map as Map
+
 -- transformers
 import Control.Monad.Trans.State.Strict
-  ( StateT, evalStateT, get, put )
+  ( StateT, evalStateT, get, modify )
 import Control.Monad.Trans.Class
   ( MonadTrans(lift) )
 
@@ -144,14 +151,10 @@ import Language.Haskell.Syntax.Module.Name
 import GHC.Unit.Module.Name
   ( moduleNameString )
 #endif
-import GHC.Unit.Types
-  ( unitIdString )
 import GHC.Utils.Panic
   ( pgmErrorDoc )
 import GHC.Tc.Plugin
   ( getTopEnv )
-import GHC.Types.Unique.FM
-  ( addToUFM, addToUFM_C, lookupUFM, plusUFM, unitUFM )
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API
@@ -367,47 +370,21 @@ resolveName (Qualified str mod_name pkg) = do
 --------------------------------------------------------------------------------
 -- Caching of found modules.
 
-data ImportedModules
+newtype ImportedModules
   = ImportedModules
-    { home_modules      :: UniqFM ModuleName Module
-    , this_pkg_modules  :: UniqFM UnitId ( UniqFM ModuleName Module )
-    , other_pkg_modules :: UniqFM UnitId ( UniqFM ModuleName Module )
+    { imported_modules :: Map (PkgQual, ModuleName) Module
     }
 
 emptyModules :: ImportedModules
 emptyModules =
-  ImportedModules
-    { home_modules      = emptyUFM
-    , this_pkg_modules  = emptyUFM
-    , other_pkg_modules = emptyUFM
-    }
+  ImportedModules Map.empty
 
 lookupCachedModule :: Monad m => PkgQual -> ModuleName -> StateT ImportedModules m (Maybe Module)
-lookupCachedModule NoPkgQual    mod_name
-  =   ( `lookupUFM` mod_name )
-  .   home_modules
-  <$> get
-lookupCachedModule (ThisPkg pkg) mod_name
-  =   ( ( `lookupUFM` mod_name ) =<< )
-  .   ( `lookupUFM` pkg )
-  .   this_pkg_modules
-  <$> get
-lookupCachedModule (OtherPkg pkg) mod_name
-  =   ( ( `lookupUFM` mod_name ) =<< )
-  .   ( `lookupUFM` pkg )
-  .   other_pkg_modules
-  <$> get
+lookupCachedModule pkg modl = Map.lookup (pkg, modl) . imported_modules <$> get
 
 insertCachedModule :: Monad m => PkgQual -> ModuleName -> Module -> StateT ImportedModules m ()
-insertCachedModule NoPkgQual    mod_name md = do
-  mods@( ImportedModules { home_modules = prev } ) <- get
-  put $ mods { home_modules = addToUFM prev mod_name md }
-insertCachedModule (ThisPkg pkg) mod_name md = do
-  mods@( ImportedModules { this_pkg_modules = prev } ) <- get
-  put $ mods { this_pkg_modules = addToUFM_C plusUFM prev pkg (unitUFM mod_name md) }
-insertCachedModule (OtherPkg pkg) mod_name md = do
-  mods@( ImportedModules { other_pkg_modules = prev } ) <- get
-  put $ mods { other_pkg_modules = addToUFM_C plusUFM prev pkg (unitUFM mod_name md) }
+insertCachedModule pkg modl md = modify $ \mods ->
+   mods{ imported_modules = Map.insert (pkg, modl) md (imported_modules mods) }
 
 lookupModule :: MonadTcPlugin m => PkgQual -> ModuleName -> StateT ImportedModules m Module
 lookupModule pkg mod_name = do
@@ -433,15 +410,13 @@ lookupModule pkg mod_name = do
             dflags = hsc_dflags hsc_env
 #endif
           pgmErrorDoc
-            ( "GHC.TcPlugin.API: could not find module " <> mod_str <> " in " <> pkg_name )
+            (    "GHC.TcPlugin.API: could not find module "
+              <> moduleNameString mod_name
+              <> case pkgQualToPkgName pkg of
+                   Just p  -> " in package " <> p
+                   Nothing -> mempty
+            )
             err_doc
-  where
-    pkg_name, mod_str :: String
-    pkg_name = case pkg of
-      NoPkgQual     -> "home package"
-      ThisPkg unit  -> "home-unit package " <> unitIdString unit
-      OtherPkg unit -> "other unit package" <> unitIdString unit
-    mod_str = moduleNameString mod_name
 
 --------------------------------------------------------------------------------
 -- Constrained traversals.
