@@ -252,8 +252,8 @@ data TcPluginRewriteResult
   --
   -- The plugin can also emit additional wanted constraints.
   | TcPluginRewriteTo
-    { tcPluginReduction :: !Reduction
-    , tcRewriterWanteds :: [Ct]
+    { tcPluginReduction    :: !Reduction
+    , tcRewriterNewWanteds :: [Ct]
     }
 
 type Rewriter = RewriteEnv -> [Ct] -> [Type] -> TcPluginM TcPluginRewriteResult
@@ -591,8 +591,8 @@ runTcPluginRewriter mbRewriter tys =
       pure ( res, s )
     case rewriteResult of
       TcPluginRewriteTo
-        { tcPluginReduction = redn
-        , tcRewriterWanteds = wanteds
+        { tcPluginReduction    = redn
+        , tcRewriterNewWanteds = wanteds
         } -> addRewriting ( Just redn ) wanteds
       TcPluginNoRewrite { }
           -> addRewriting Nothing []
@@ -668,7 +668,7 @@ rewrite_tyvar2 tv fr@(_, eq_rel) = do
                 (ReprEq, _rel)  -> rewriting_co1
                 (NomEq, NomEq)  -> rewriting_co1
                 (NomEq, ReprEq) -> mkSubCo rewriting_co1
-          return $ RTRFollowed $ mkReduction rewriting_co rhs_ty 
+          return $ RTRFollowed $ mkReduction rewriting_co rhs_ty
     _other -> return RTRNotFollowed
 
 rewrite_vector :: Kind

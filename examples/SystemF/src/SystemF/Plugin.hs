@@ -64,7 +64,9 @@ data PluginDefs =
 
 findTypesModule :: MonadTcPlugin m => m Module
 findTypesModule = do
-  findResult <- findImportedModule ( mkModuleName "SystemF.Type" ) NoPkgQual
+  let modlName = mkModuleName "SystemF.Type"
+  pkgQual    <- resolveImport      modlName Nothing
+  findResult <- findImportedModule modlName pkgQual
   case findResult of
     Found _ res     -> pure res
     FoundMultiple _ -> error $ "SystemF.Plugin: found multiple modules named SystemF.Type in the current package."
