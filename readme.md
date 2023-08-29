@@ -38,7 +38,7 @@ This library provides a unified interface that works across different GHC versio
 aiming to reduce the CPP burden imposed on authors of type-checking plugins.    
 
 We make use of GHC's new API for rewriting type-families in typechecker plugins,
-which is scheduled to land in GHC 9.4.    
+which was part of GHC 9.4.    
 A compatibility layer is provided, which retro-fits the rewriting functionality onto
 previous versions of GHC.
 

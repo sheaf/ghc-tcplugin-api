@@ -241,6 +241,7 @@ module GHC.TcPlugin.API
   , isSkolemTyVar
   , isMetaTyVar, isFilledMetaTyVar_maybe
   , writeMetaTyVar
+  , readTcRef, writeTcRef
 
     -- | == Some further functions for inspecting constraints
   , eqType
@@ -428,6 +429,11 @@ module GHC.TcPlugin.API
     -- * The type-checking environment
   , getEnvs
 
+    -- * Interacting with GHC's constraint solver
+  , TcS
+  , InertSet, getInertSet, setInertSet
+  , getTcEvBindsMap, setTcEvBindsMap
+
     -- * Built-in types
 
     -- | This module also re-exports the built-in types that GHC already knows about.
@@ -579,6 +585,22 @@ import GHC.Data.FastString
   ( FastString, fsLit, unpackFS )
 import qualified GHC.Tc.Plugin
   as GHC
+#if MIN_VERSION_ghc(9,4,0)
+import GHC.Tc.Solver.InertSet
+  ( InertSet )
+#endif
+import GHC.Tc.Solver.Monad
+  ( TcS
+#if !MIN_VERSION_ghc(9,4,0)
+  , InertSet
+#endif
+#if MIN_VERSION_ghc(9,8,0)
+  , getInertSet, updInertSet
+#else
+  , getTcSInerts, setTcSInerts
+#endif
+  , getTcEvBindsMap, setTcEvBindsMap
+  )
 import GHC.Tc.Types
   ( TcTyThing(..), TcGblEnv(..), TcLclEnv(..)
 #if HAS_REWRITING
@@ -601,7 +623,7 @@ import GHC.Tc.Types.Evidence
 import GHC.Tc.Types.Origin
   ( CtOrigin(..) )
 import GHC.Tc.Utils.Monad
-  ( newName )
+  ( newName, readTcRef, writeTcRef )
 import qualified GHC.Tc.Utils.Monad
   as GHC
     ( traceTc, setCtLocM )
@@ -1064,3 +1086,20 @@ mkPrimEqPredRole Phantom          = panic "mkPrimEqPredRole phantom"
 
 #endif
 #endif
+
+--------------------------------------------------------------------------------
+
+#if MIN_VERSION_ghc(9,8,0)
+setInertSet :: InertSet -> TcS ()
+setInertSet inerts = updInertSet ( const inerts )
+  -- workaround for setInertSet not being exported
+
+#elif !MIN_VERSION_ghc(9,8,0)
+getInertSet :: TcS InertSet
+getInertSet = getTcSInerts
+
+setInertSet :: InertSet -> TcS ()
+setInertSet = setTcSInerts
+#endif
+
+--------------------------------------------------------------------------------

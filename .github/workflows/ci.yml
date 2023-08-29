@@ -13,20 +13,23 @@ jobs:
     strategy:
       matrix:
         cfg:
+          - { os: ubuntu-latest  , ghc: "9.6.2"  }
+          - { os: ubuntu-latest  , ghc: "9.4.7"  }
+          - { os: ubuntu-latest  , ghc: "9.2.8"  }
           - { os: ubuntu-latest  , ghc: "9.2.3"  }
           - { os: ubuntu-latest  , ghc: "9.0.2"  }
           - { os: ubuntu-latest  , ghc: "8.10.7" }
           - { os: ubuntu-latest  , ghc: "8.8.4"  }
-          - { os: macOS-latest   , ghc: "latest" }
-          - { os: windows-latest , ghc: "latest" }
+          - { os: macOS-latest   , ghc: "9.6.2"  }
+          - { os: windows-latest , ghc: "9.6.2"  }
 
     steps:
     - name: Checkout commit
-      uses: actions/checkout@v2
+      uses: actions/checkout@v3
       if: github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.ref == 'refs/heads/main'
 
     - name: Set up GHC & cabal
-      uses: haskell/actions/setup@v1
+      uses: haskell/actions/setup@v2
       with:
         ghc-version: ${{ matrix.cfg.ghc }}
         cabal-version: ${{ matrix.cfg.cabal }}

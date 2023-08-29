@@ -130,6 +130,10 @@ import Control.Monad.Trans.Class
   ( MonadTrans(lift) )
 
 -- ghc
+#if MIN_VERSION_ghc(9,8,0)
+import GHC.Iface.Errors.Ppr
+  ( missingInterfaceErrorDiagnostic )
+#endif
 #if MIN_VERSION_ghc(9,3,0)
 import GHC.Iface.Errors
   ( cannotFindModule )
@@ -141,8 +145,6 @@ import GHC.Driver.Types
   ( hsc_dflags )
 import GHC.Driver.Finder
   ( cannotFindModule )
-import GHC.Driver.Session
-  ( DynFlags )
 #endif
 #if MIN_VERSION_ghc(9,5,0)
 import Language.Haskell.Syntax.Module.Name
@@ -155,6 +157,10 @@ import GHC.Utils.Panic
   ( pgmErrorDoc )
 import GHC.Tc.Plugin
   ( getTopEnv )
+#if MIN_VERSION_ghc(9,8,0)
+import GHC.Types.Error
+  ( HasDefaultDiagnosticOpts(defaultOpts) )
+#endif
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API
@@ -402,12 +408,14 @@ lookupModule pkg mod_name = do
           hsc_env <- lift . liftTcPluginM $ getTopEnv
           let
             err_doc :: SDoc
+            err_doc =
+#if MIN_VERSION_ghc(9,8,0)
+              missingInterfaceErrorDiagnostic defaultOpts $
+#endif
 #if MIN_VERSION_ghc(9,2,0)
-            err_doc = cannotFindModule hsc_env mod_name other
+              cannotFindModule hsc_env mod_name other
 #else
-            err_doc = cannotFindModule dflags  mod_name other
-            dflags :: DynFlags
-            dflags = hsc_dflags hsc_env
+              cannotFindModule (hsc_dflags hsc_env) mod_name other
 #endif
           pgmErrorDoc
             (    "GHC.TcPlugin.API: could not find module "
