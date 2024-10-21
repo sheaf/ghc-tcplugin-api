@@ -15,18 +15,19 @@ module SystemF.Plugin ( plugin ) where
 -- base
 import Data.Functor
   ( ($>) )
-import Data.Maybe
-  ( isJust )
 
 -- transformers
 import Control.Monad.Trans.State.Strict
-  ( StateT, runStateT, get, put )
+  ( State, StateT )
+import qualified Control.Monad.Trans.State.Strict as State
+  ( runState, runStateT, get, put, modify )
 import Control.Monad.Trans.Class
   ( lift )
 
 -- ghc
 import qualified GHC.Plugins as GHC
   ( Plugin(..), defaultPlugin, purePlugin )
+import GHC.Types.Var.Set
 import GHC.Utils.Outputable
   ( empty, ($$) )
 
@@ -98,26 +99,27 @@ pattern NoReduction = False
 pattern DidRewrite :: RewriteQ
 pattern DidRewrite = True
 
-type RewriteM = StateT RewriteQ ( TcPluginM Rewrite )
+type RewriteM = StateT ( RewriteQ, DCoVarSet ) ( TcPluginM Rewrite )
 
-runRewriteM :: RewriteM a -> TcPluginM Rewrite ( Maybe a )
+runRewriteM :: RewriteM a -> TcPluginM Rewrite ( Maybe ( a, DCoVarSet ) )
 runRewriteM ma = do
-  ( a, didRewrite ) <- runStateT ma NoReduction
+  ( a, ( didRewrite, cvs ) ) <- State.runStateT ma ( NoReduction, emptyDVarSet )
   pure $
     if didRewrite
-    then Just a
+    then Just ( a, cvs )
     else Nothing
 
-rewrote :: RewriteM ()
-rewrote = put DidRewrite
+rewrote :: DCoVarSet -> RewriteM ()
+rewrote cvs = State.modify ( \ ( _, cvs0 ) -> ( DidRewrite, cvs0 `unionDVarSet` cvs ) )
 
 askIfRewrote :: RewriteM a -> RewriteM ( a, RewriteQ )
 askIfRewrote ma = do
-  before <- get
-  put NoReduction
+  ( before, cvs1 ) <- State.get
+  State.put ( NoReduction, emptyDVarSet )
   a <- ma
-  didRewrite <- get
-  put ( before || didRewrite )
+  ( didRewrite, cvs2 ) <- State.get
+  State.put
+    ( before || didRewrite, cvs1 `unionDVarSet` cvs2 )
   pure ( a, didRewrite )
 
 pluginRewrite :: PluginDefs -> UniqFM TyCon TcPluginRewriter
@@ -138,10 +140,10 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
   = pure $ TcPluginNoRewrite
   where
 
-    finish :: Maybe Type -> TcPluginRewriteResult
-    finish ( Just ty ) =
+    finish :: Maybe ( Type, DCoVarSet ) -> TcPluginRewriteResult
+    finish ( Just ( ty, cvs ) ) =
       TcPluginRewriteTo
-        ( mkTyFamAppReduction "SystemF.Plugin" Nominal applySubTyCon applySubArgs ty )
+        ( mkTyFamAppReduction "SystemF.Plugin" Nominal cvs applySubTyCon applySubArgs ty )
         []
     finish _ = TcPluginNoRewrite
 
@@ -151,19 +153,22 @@ rewriteSub defs@( PluginDefs { .. } ) givens applySubArgs
       -- (Clos) ApplySub t ( ApplySub s a )
       --   ===> ApplySub ( t :.: s ) a
       -- NB. might need to use Givens to find that the argument is 'ApplySub s a'.
-      | Just ( kϕ0, _kϕ, l, s, a ) <- detectApplySub defs givens sub_arg
+      | Just ( ( kϕ0, _kϕ, l, s, a ), cvs ) <- detectApplySub defs givens sub_arg
       , let
           sub' :: Type
           sub' = mkTyConApp composeTyCon [ kϕ0, kϕ, kψ, sub, s ]
       = do
-        rewrote
+        rewrote cvs
         rewriteApplySub kϕ0 kψ l sub' a
       | otherwise
       = do
         sub' <- canonicaliseSub defs givens kϕ kψ k sub
-        if isId defs givens sub'
-        then rewrote $> sub_arg
-        else pure $ mkTyConApp applySubTyCon [ kϕ, kψ, k, sub', sub_arg ]
+        case isId defs givens sub' of
+          Just cvs ->
+            rewrote cvs $> sub_arg
+          Nothing ->
+            pure $
+              mkTyConApp applySubTyCon [ kϕ, kψ, k, sub', sub_arg ]
 
 canonicaliseSub :: PluginDefs -> [ Ct ]
                 -> Type -> Type -> Type -> Type
@@ -181,7 +186,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc2 == composeTyCon
       = do
         lift $ tcPluginTrace "AssEnv" ( ppr t $$ ppr s $$ ppr r )
-        rewrote
+        rewrote emptyDVarSet
         go $
           mkTyConApp composeTyCon
             [ kϕ1, kψ2, kξ1
@@ -196,7 +201,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc2 == extendTyCon
       = do
         lift $ tcPluginTrace "MapEnv" ( ppr t $$ ppr s )
-        rewrote
+        rewrote emptyDVarSet
         go $
           mkTyConApp extendTyCon
             [ kϕ2, kψ, l
@@ -213,7 +218,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc3 == bindTyCon
       = do
         lift $ tcPluginTrace "ShiftCons" ( ppr s )
-        rewrote
+        rewrote emptyDVarSet
         go s
       -- (ShiftLift1) KUnder s :.: KBind
       --         ===> KBind :.: s
@@ -225,7 +230,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc3 == underTyCon
       = do
         lift $ tcPluginTrace "ShiftLift1" ( ppr s )
-        rewrote
+        rewrote emptyDVarSet
         go $
           mkTyConApp composeTyCon
             [ kϕ, kψ0, kψ
@@ -244,7 +249,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc4 == underTyCon
       = do
         lift $ tcPluginTrace "ShiftLift2" ( ppr t $$ ppr s )
-        rewrote
+        rewrote emptyDVarSet
         go $
           mkTyConApp composeTyCon
             [ kϕ, kψ1, kψ
@@ -265,7 +270,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc3 == underTyCon
       = do
         lift $ tcPluginTrace "Lift1" ( ppr t $$ ppr s )
-        rewrote
+        rewrote emptyDVarSet
         go $
           mkTyConApp underTyCon
           [ kϕ2, kψ1, l
@@ -283,7 +288,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc4 == underTyCon
       = do
         lift $ tcPluginTrace "Lift2" ( ppr u $$ ppr t $$ ppr s )
-        rewrote
+        rewrote emptyDVarSet
         go $
           mkTyConApp composeTyCon
             [ kϕ, kψ0, kψ
@@ -303,15 +308,17 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc3 == underTyCon
       = do
         lift $ tcPluginTrace "LiftEnv" ( ppr t $$ ppr s )
-        rewrote
+        s' <-
+          case isId defs givens t of
+            Just cvs -> do
+              rewrote cvs
+              return s
+            Nothing -> do
+              rewrote emptyDVarSet
+              return $ mkTyConApp composeTyCon [kϕ0, kψ0, kψ1, t, s]
         go $
           mkTyConApp extendTyCon
-            [ kϕ0, kψ1, l
-            , if isId defs givens t
-              then s
-              else mkTyConApp composeTyCon [kϕ0, kψ0, kψ1, t, s]
-            , a
-            ]
+            [ kϕ0, kψ1, l, s', a]
       -- (IdL) KId :.: s
       --  ===> s
       | Just ( tc1, [ _, _ , _, i, s ] ) <- splitTyConApp_maybe sub
@@ -320,7 +327,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc2 == idTyCon
       = do
         lift $ tcPluginTrace "IdL" ( ppr s )
-        rewrote
+        rewrote emptyDVarSet
         go s
       -- (IdR) s :.: KId
       --  ===> s
@@ -330,7 +337,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc2 == idTyCon
       = do
         lift $ tcPluginTrace "IdR" ( ppr s )
-        rewrote
+        rewrote emptyDVarSet
         go s
       -- (LiftId) KUnder KId
       --     ===> KId
@@ -340,7 +347,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       , tc2 == idTyCon
       = do
         lift $ tcPluginTrace "LiftId" empty
-        rewrote
+        rewrote emptyDVarSet
         pure $ i
       -- Recur under KUnder.
       | Just ( tc1, [ kϕ0, kψ0, k0, s ] ) <- splitTyConApp_maybe sub
@@ -379,7 +386,7 @@ canonicaliseSub defs@( PluginDefs { .. } ) givens kϕ kψ k = go
       | otherwise
       = pure sub
 
-detectApplySub :: PluginDefs -> [ Ct ] -> Type -> Maybe ( Type, Type, Type, Type, Type )
+detectApplySub :: PluginDefs -> [ Ct ] -> Type -> Maybe ( ( Type, Type, Type, Type, Type ), DCoVarSet )
 detectApplySub ( PluginDefs { applySubTyCon } ) =
   recognise \ ty ->
     case splitTyConApp_maybe ty of
@@ -393,39 +400,51 @@ detectApplySub ( PluginDefs { applySubTyCon } ) =
 --
 -- Useful to check whether some type is a type-family application in the presence of
 -- Givens.
-recognise :: forall r. ( Type -> Maybe r ) -> [ Ct ] -> Type -> Maybe r
+recognise :: forall r. ( Type -> Maybe r ) -> [ Ct ] -> Type -> Maybe ( r, DCoVarSet )
 recognise f givens ty
   | Just r <- f ty
-  = Just r
+  = Just ( r, emptyDVarSet )
   | otherwise
-  = go [ ty ] givens
+  = case ( `State.runState` emptyDVarSet ) $ go [ ty ] givens of
+      ( Nothing, _ ) -> Nothing
+      ( Just ty', cvs ) -> Just ( ty', cvs )
   where
-    go :: [ Type ] -> [ Ct ] -> Maybe r
-    go _   [] = Nothing
+    go :: [ Type ] -> [ Ct ] -> State DCoVarSet ( Maybe r )
+    go _   [] = return Nothing
     go tys ( g : gs )
-      | EqPred NomEq lhs rhs <- classifyPredType ( ctPred g )
+      | let ctTy = ctPred g
+      , EqPred NomEq lhs rhs <- classifyPredType ctTy
+      , let declareDepCos = State.modify ( unionDVarSet $ dCoVarsOfType ctTy )
       = if
           | any ( eqType lhs ) tys
           -> case f rhs of
-              Just r  -> Just r
+              Just r  -> do
+                declareDepCos
+                return $ Just r
               Nothing ->
                 if any ( eqType rhs ) tys
-                then go tys gs
+                then do
+                  declareDepCos
+                  go tys gs
                 else go ( rhs : tys ) givens
           | any ( eqType rhs ) tys
           -> case f lhs of
-              Just r  -> Just r
+              Just r  -> do
+                declareDepCos
+                return $ Just r
               Nothing ->
                 if any ( eqType lhs ) tys
-                then go tys gs
+                then do
+                  declareDepCos
+                  go tys gs
                 else go ( lhs : tys ) givens
           | otherwise
           -> go tys gs
       | otherwise
       = go tys gs
 
-isId :: PluginDefs -> [ Ct ] -> Type -> Bool
-isId ( PluginDefs { .. } ) givens s = isJust $ recognise isIdTyCon givens s
+isId :: PluginDefs -> [ Ct ] -> Type -> Maybe DCoVarSet
+isId ( PluginDefs { .. } ) givens s = snd <$> recognise isIdTyCon givens s
   where
     isIdTyCon :: Type -> Maybe ()
     isIdTyCon ty = case splitTyConApp_maybe ty of

@@ -236,7 +236,7 @@ module GHC.TcPlugin.API
   , classifyPredType, ctPred
 
     -- | == Handling type variables
-  , TyVar, CoVar
+  , TyVar, CoVar, DCoVarSet
   , MetaDetails, MetaInfo
   , isSkolemTyVar
   , isMetaTyVar, isFilledMetaTyVar_maybe
@@ -258,6 +258,7 @@ module GHC.TcPlugin.API
   , newCoercionHole
   , mkReflCo, mkSymCo, mkTransCo, mkUnivCo
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
+  , emptyDVarSet, unionDVarSet, dCoVarsOfType
 
     -- *** Evidence terms
 
@@ -501,7 +502,7 @@ import GHC.Core.Class
   ( Class(..), FunDep )
 import GHC.Core.Coercion
   ( mkReflCo, mkSymCo, mkTransCo
-  , mkUnivCo
+  , mkUnivCo, isCoVar
 #if MIN_VERSION_ghc(8,10,0)
   , mkPrimEqPredRole
 #endif
@@ -572,6 +573,7 @@ import GHC.Core.Type
   , mkAppTy, mkAppTys, isTyVarTy, getTyVar_maybe
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
   , mkNumLitTy, isNumLitTy, mkStrLitTy, isStrLitTy
+  , tyCoFVsOfType
 #if !MIN_VERSION_ghc(9,6,0)
   , eqType
 #endif
@@ -648,6 +650,15 @@ import GHC.Types.Name
 import GHC.Types.Name.Occurrence
   ( OccName(..)
   , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
+  )
+import GHC.Types.Var.Set
+  ( emptyVarSet
+  , mkDVarSet, emptyDVarSet, unionDVarSet
+#if MIN_VERSION_ghc(9,11,0)
+  , DCoVarSet
+#else
+  , DVarSet
+#endif
   )
 #if MIN_VERSION_ghc(9,3,0)
 import GHC
@@ -1009,10 +1020,18 @@ setEvBind ev_bind = do
 mkPluginUnivCo
   :: String -- ^ Name of equality (for the plugin's internal use, or for debugging)
   -> Role
+  -> DCoVarSet -- ^ Coercions that this proof term depends on (see e.g. 'dCoVarsOfType')
   -> TcType -- ^ LHS
   -> TcType -- ^ RHS
   -> Coercion
-mkPluginUnivCo str role lhs rhs = mkUnivCo ( PluginProv str ) role lhs rhs
+mkPluginUnivCo str role _depCos lhs rhs =
+  let prov =
+        PluginProv
+          str
+#if MIN_VERSION_ghc(9,11,0)
+          _depCos
+#endif
+  in mkUnivCo prov role lhs rhs
 
 -- | Conjure up an evidence term for an equality between two types
 -- at the given 'Role' ('Nominal' or 'Representational').
@@ -1024,10 +1043,12 @@ mkPluginUnivCo str role lhs rhs = mkUnivCo ( PluginProv str ) role lhs rhs
 mkPluginUnivEvTerm
   :: String -- ^ Name of equality (for the plugin's internal use, or for debugging)
   -> Role
+  -> DCoVarSet -- ^ Coercions that this proof term depends on (see e.g. 'dCoVarsOfType')
   -> TcType -- ^ LHS
   -> TcType -- ^ RHS
   -> EvTerm
-mkPluginUnivEvTerm str role lhs rhs = evCoercion $ mkPluginUnivCo str role lhs rhs
+mkPluginUnivEvTerm str role depCos lhs rhs =
+  evCoercion $ mkPluginUnivCo str role depCos lhs rhs
 
 -- | Provide a rewriting of a saturated type family application
 -- at the given 'Role' ('Nominal' or 'Representational').
@@ -1035,14 +1056,15 @@ mkPluginUnivEvTerm str role lhs rhs = evCoercion $ mkPluginUnivCo str role lhs r
 -- The result can be passed to 'TcPluginRewriteTo' to specify the outcome
 -- of rewriting a type family application.
 mkTyFamAppReduction
-  :: String   -- ^ Name of reduction (for debugging)
-  -> Role     -- ^ Role of reduction ('Nominal' or 'Representational')
-  -> TyCon    -- ^ Type family 'TyCon'
-  -> [TcType] -- ^ Type family arguments
-  -> TcType   -- ^ The type that the type family application reduces to
+  :: String    -- ^ Name of reduction (for debugging)
+  -> Role      -- ^ Role of reduction ('Nominal' or 'Representational')
+  -> DCoVarSet -- ^ Coercions that this reduction depends on (see e.g. 'dCoVarsOfType')
+  -> TyCon     -- ^ Type family 'TyCon'
+  -> [TcType]  -- ^ Type family arguments
+  -> TcType    -- ^ The type that the type family application reduces to
   -> Reduction
-mkTyFamAppReduction str role tc args ty =
-  Reduction ( mkPluginUnivCo str role ( mkTyConApp tc args ) ty ) ty
+mkTyFamAppReduction str role depCos tc args ty =
+  Reduction ( mkPluginUnivCo str role depCos ( mkTyConApp tc args ) ty ) ty
 
 --------------------------------------------------------------------------------
 
@@ -1088,6 +1110,15 @@ mkPrimEqPredRole Phantom          = panic "mkPrimEqPredRole phantom"
 #endif
 
 --------------------------------------------------------------------------------
+
+#if !MIN_VERSION_ghc(9,11,0)
+type DCoVarSet = DVarSet
+#endif
+
+-- | The collection of coercions free in a type, as a 'DCoVarSet'.
+dCoVarsOfType :: Type -> DCoVarSet
+dCoVarsOfType ty =
+  mkDVarSet $ fst $ tyCoFVsOfType ty isCoVar emptyVarSet ([], emptyVarSet)
 
 #if MIN_VERSION_ghc(9,8,0)
 setInertSet :: InertSet -> TcS ()

@@ -1,3 +1,14 @@
+# Version 0.12.0.0 (2024-21-10)
+
+- Add support for GHC 9.12.
+
+- `mkPluginUnivCo`, `mkPluginUnivEvTerm` and `mkTyFamAppReduction` now all take
+  an additional `DCoVarSet` argument which allows specifying coercions that we
+  depend on. This stops terms being floated out past any enclosing Givens
+  (see [GHC issue #23923](https://gitlab.haskell.org/ghc/ghc/-/issues/23923)).
+
+- Add `dCoVarsOfType` utility function.
+
 # Version 0.11.0.0 (2023-08-29)
 
 - Add support for GHC 9.8.
