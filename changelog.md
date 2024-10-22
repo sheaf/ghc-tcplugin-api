@@ -1,3 +1,18 @@
+# Version 0.12.0.0 (2024-22-10)
+
+- Add support for GHC 9.12.
+
+- `mkPluginUnivCo`, `mkPluginUnivEvTerm` and `mkTyFamAppReduction` now all take
+  an additional `DVarSet` argument which allows specifying evidence that we
+  depend on. This stops evidence terms being floated out past used enclosing
+  Givens (see [GHC issue #23923](https://gitlab.haskell.org/ghc/ghc/-/issues/23923)).
+
+- Re-export `DVarSet`, `emptyDVarSet`, `extendDVarSet`, `unionDVarSet`
+  `unitDVarSet`, and `mkDVarSet`, as well as `ctEvId`, in order to facilitate
+  construction and manipulation of `DVarSet`s.
+
+- Re-export `GHC.Types.Unique.Set`, `GHC.Types.Unique.DSet`.
+
 # Version 0.11.0.0 (2023-08-29)
 
 - Add support for GHC 9.8.

@@ -1,5 +1,6 @@
 {-# LANGUAGE Haskell2010 #-}
 
+{-# LANGUAGE CPP                      #-}
 {-# LANGUAGE DataKinds                #-}
 {-# LANGUAGE GADTs                    #-}
 {-# LANGUAGE PolyKinds                #-}
@@ -7,6 +8,10 @@
 {-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE TypeApplications         #-}
 {-# LANGUAGE TypeOperators            #-}
+
+#if MIN_VERSION_ghc(9,9,0)
+{-# LANGUAGE TypeAbstractions #-}
+#endif
 
 module SystemF.Examples where
 
@@ -47,7 +52,11 @@ type ChurchKind :: Kind -> Kind
 type ChurchKind k = Fun (Fun k k) (Fun k k)
 
 type ChurchType :: forall (k :: Kind). Type KEmpty (ChurchKind k)
-type ChurchType = Forall ( (VarTy KZ :-> VarTy KZ) :-> (VarTy KZ :-> VarTy KZ) )
+type ChurchType
+#if MIN_VERSION_ghc(9,9,0)
+  @k
+#endif
+  = Forall ( (VarTy KZ :-> VarTy KZ) :-> (VarTy KZ :-> VarTy KZ) )
 
 church :: forall (k :: Kind). Hs.Int -> Term Empty (ChurchType @k)
 church i = TyLam $ LamE ( SVarTy SKZ :%-> SVarTy SKZ ) $ LamE ( SVarTy SKZ ) ( go i )
