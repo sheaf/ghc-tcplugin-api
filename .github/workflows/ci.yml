@@ -14,32 +14,63 @@ jobs:
       matrix:
         cfg:
           - { os: ubuntu-latest  , ghc: "9.10.1"  }
-          - { os: ubuntu-latest  , ghc: "9.8.2"  }
-          - { os: ubuntu-latest  , ghc: "9.6.2"  }
-          - { os: ubuntu-latest  , ghc: "9.4.7"  }
-          - { os: ubuntu-latest  , ghc: "9.2.8"  }
-          - { os: ubuntu-latest  , ghc: "9.0.2"  }
-          - { os: ubuntu-latest  , ghc: "8.10.7" }
-          - { os: ubuntu-latest  , ghc: "8.8.4"  }
+          - { os: ubuntu-latest  , ghc: "9.8.2"   }
+          - { os: ubuntu-latest  , ghc: "9.6.2"   }
+          - { os: ubuntu-latest  , ghc: "9.4.7"   }
+          - { os: ubuntu-latest  , ghc: "9.2.8"   }
+          - { os: ubuntu-latest  , ghc: "9.0.2"   }
+          - { os: ubuntu-latest  , ghc: "8.10.7"  }
+          - { os: ubuntu-latest  , ghc: "8.8.4"   }
           - { os: macOS-latest   , ghc: "9.10.1"  }
           - { os: windows-latest , ghc: "9.10.1"  }
 
     steps:
-    - name: Checkout commit
-      uses: actions/checkout@v3
-      if: github.event.action == 'opened' || github.event.action == 'synchronize' || github.event.ref == 'refs/heads/main'
+      - uses: actions/checkout@v4
 
-    - name: Set up GHC & cabal
-      uses: haskell/actions/setup@v2
-      with:
-        ghc-version: ${{ matrix.cfg.ghc }}
-        cabal-version: ${{ matrix.cfg.cabal }}
+      - name: Set up GHC ${{ matrix.cfg.ghc }}
+        uses: haskell-actions/setup@v2
+        id: setup
+        with:
+          ghc-version: ${{ matrix.cfg.ghc }}
+          # Defaults, added for clarity:
+          cabal-version: 'latest'
+          cabal-update: true
 
-    - name: Build ghc-tcplugin-api
-      run: cabal build ghc-tcplugin-api
+      - name: Configure the build
+        run: |
+          cabal configure --disable-documentation
+          cabal build all --dry-run
+        # The last step generates dist-newstyle/cache/plan.json for the cache key.
 
-    - name: Build and lint System F example
-      # Skip this test on GHC 8.8.4: we need StandaloneKindSignatures.
-      if: matrix.cfg.ghc != '8.8.4'
-      working-directory: ./examples/SystemF
-      run: cabal build system-f
+      - name: Restore cached dependencies
+        uses: actions/cache/restore@v4
+        id: cache
+        env:
+          key: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ env.key }}-plan-${{ hashFiles('**/plan.json') }}
+          restore-keys: ${{ env.key }}-
+
+      - name: Install dependencies
+        # If we had an exact cache hit, the dependencies will be up to date.
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: cabal build all --only-dependencies
+
+      # Cache dependencies already here, so that we do not have to rebuild them should the subsequent steps fail.
+      - name: Save cached dependencies
+        uses: actions/cache/save@v4
+        # If we had an exact cache hit, trying to save the cache would error because of key clash.
+        if: steps.cache.outputs.cache-hit != 'true'
+        with:
+          path: ${{ steps.setup.outputs.cabal-store }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+
+      - name: Build ghc-tcplugin-api
+        run: cabal build ghc-tcplugin-api
+
+      - name: Build and lint System F example
+        # Skip this test on GHC 8.8.4: we need StandaloneKindSignatures.
+        if: matrix.cfg.ghc != '8.8.4'
+        working-directory: ./examples/SystemF
+        run: cabal build system-f
