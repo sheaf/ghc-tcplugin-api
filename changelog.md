@@ -7,7 +7,7 @@
   depend on. This stops evidence terms being floated out past used enclosing
   Givens (see [GHC issue #23923](https://gitlab.haskell.org/ghc/ghc/-/issues/23923)).
 
-- Re-export `DVarSet`, `emptyDVarSet`, `extendDVarSet`, `unionDVarSet`
+- Re-export `DVarSet`, `emptyDVarSet`, `extendDVarSet`, `unionDVarSet`,
   `unitDVarSet`, and `mkDVarSet`, as well as `ctEvId`, in order to facilitate
   construction and manipulation of `DVarSet`s.
 

@@ -6,7 +6,7 @@ license:        BSD-3-Clause
 build-type:     Simple
 author:         Sam Derbyshire
 maintainer:     Sam Derbyshire
-copyright:      2021-2023 Sam Derbyshire
+copyright:      2021-2024 Sam Derbyshire
 homepage:       https://github.com/sheaf/ghc-tcplugin-api
 category:       Type System, GHC, Plugin
 description:
