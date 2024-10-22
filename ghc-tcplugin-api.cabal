@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.11.0.0
+version:        0.12.0.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
@@ -33,11 +33,11 @@ library
 
   build-depends:
     base
-      >= 4.13.0 && < 4.21,
+      >= 4.13.0 && < 4.22,
     containers
       >= 0.6    && < 0.8,
     ghc
-      >= 8.8    && < 9.11,
+      >= 8.8    && < 9.13,
     transformers
       >= 0.5    && < 0.7,
 
@@ -68,6 +68,8 @@ library
     , GHC.Plugins
     , GHC.Types.Unique.DFM
     , GHC.Types.Unique.FM
+    , GHC.Types.Unique.Set
+    , GHC.Types.Unique.DSet
     , GHC.Utils.Outputable
 
   if impl(ghc >= 9.3.0)
@@ -126,7 +128,9 @@ library
         , SrcLoc     as GHC.Types.SrcLoc
         , Unique     as GHC.Types.Unique
         , UniqDFM    as GHC.Types.Unique.DFM
+        , UniqDSet   as GHC.Types.Unique.DSet
         , UniqFM     as GHC.Types.Unique.FM
+        , UniqSet    as GHC.Types.Unique.Set
         , Var        as GHC.Types.Var
         , VarEnv     as GHC.Types.Var.Env
         , VarSet     as GHC.Types.Var.Set

@@ -13,15 +13,16 @@ jobs:
     strategy:
       matrix:
         cfg:
+          - { os: ubuntu-latest  , ghc: "9.10.1"  }
+          - { os: ubuntu-latest  , ghc: "9.8.2"  }
           - { os: ubuntu-latest  , ghc: "9.6.2"  }
           - { os: ubuntu-latest  , ghc: "9.4.7"  }
           - { os: ubuntu-latest  , ghc: "9.2.8"  }
-          - { os: ubuntu-latest  , ghc: "9.2.3"  }
           - { os: ubuntu-latest  , ghc: "9.0.2"  }
           - { os: ubuntu-latest  , ghc: "8.10.7" }
           - { os: ubuntu-latest  , ghc: "8.8.4"  }
-          - { os: macOS-latest   , ghc: "9.6.2"  }
-          - { os: windows-latest , ghc: "9.6.2"  }
+          - { os: macOS-latest   , ghc: "9.10.1"  }
+          - { os: windows-latest , ghc: "9.10.1"  }
 
     steps:
     - name: Checkout commit

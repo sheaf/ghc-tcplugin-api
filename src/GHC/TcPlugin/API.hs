@@ -246,6 +246,7 @@ module GHC.TcPlugin.API
     -- | == Some further functions for inspecting constraints
   , eqType
   , ctLoc, ctEvidence, ctFlavour, ctEqRel, ctOrigin
+  , ctEvId
 
     -- ** Constraint evidence
 
@@ -258,6 +259,20 @@ module GHC.TcPlugin.API
   , newCoercionHole
   , mkReflCo, mkSymCo, mkTransCo, mkUnivCo
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
+
+    -- *** Depending on outer Givens
+
+    -- | When a plugin returns a coercion that depends on outer Given constraints,
+    -- it should declare this dependency using the 'DVarSet' argument to
+    -- functions such as 'mkPluginUnivCo', 'mkPluginUnivEvTerm' and 'mkTyFamAppReduction'
+    -- in order to avoid this coercion getting floated out past such enclosing
+    -- Givens.
+    --
+    -- You can use 'ctEvId' to obtain the evidence variable corresponding to
+    -- a Given constraint, and functions such as 'emptyDVarSet', 'unitDVarSet',
+    -- 'unionDVarSet' and 'extendDVarSet' to construct the appropriate 'DVarSet's.
+  , DVarSet
+  , emptyDVarSet, unitDVarSet, unionDVarSet, extendDVarSet, mkDVarSet
 
     -- *** Evidence terms
 
@@ -611,7 +626,7 @@ import GHC.Tc.Types
 import GHC.Tc.Types.Constraint
   ( Ct(..), CtLoc(..), CtEvidence(..), CtFlavour(..)
   , QCInst(..), TcEvDest(..)
-  , ctPred, ctLoc, ctEvidence, ctEvExpr
+  , ctPred, ctLoc, ctEvidence, ctEvId, ctEvExpr
   , ctFlavour, ctEqRel, ctOrigin
   , bumpCtLocDepth
   , mkNonCanonical
@@ -648,6 +663,11 @@ import GHC.Types.Name
 import GHC.Types.Name.Occurrence
   ( OccName(..)
   , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
+  )
+import GHC.Types.Var.Set
+  ( mkDVarSet, emptyDVarSet, extendDVarSet
+  , unitDVarSet, extendDVarSet, unionDVarSet
+  , DVarSet
   )
 #if MIN_VERSION_ghc(9,3,0)
 import GHC
@@ -1007,12 +1027,20 @@ setEvBind ev_bind = do
 -- The plugin is responsible for not emitting any unsound coercions,
 -- such as a coercion between 'Int' and 'Float'.
 mkPluginUnivCo
-  :: String -- ^ Name of equality (for the plugin's internal use, or for debugging)
+  :: String  -- ^ Name of equality (for the plugin's internal use, or for debugging)
   -> Role
-  -> TcType -- ^ LHS
-  -> TcType -- ^ RHS
+  -> DVarSet -- ^ Evidence that this proof term depends on (use e.g. 'ctEvId' for a Given)
+  -> TcType  -- ^ LHS
+  -> TcType  -- ^ RHS
   -> Coercion
-mkPluginUnivCo str role lhs rhs = mkUnivCo ( PluginProv str ) role lhs rhs
+mkPluginUnivCo str role _deps lhs rhs =
+  let prov =
+        PluginProv
+          str
+#if MIN_VERSION_ghc(9,11,0)
+          _deps
+#endif
+  in mkUnivCo prov role lhs rhs
 
 -- | Conjure up an evidence term for an equality between two types
 -- at the given 'Role' ('Nominal' or 'Representational').
@@ -1022,12 +1050,14 @@ mkPluginUnivCo str role lhs rhs = mkUnivCo ( PluginProv str ) role lhs rhs
 -- The plugin is responsible for not emitting any unsound equalities,
 -- such as an equality between 'Int' and 'Float'.
 mkPluginUnivEvTerm
-  :: String -- ^ Name of equality (for the plugin's internal use, or for debugging)
+  :: String  -- ^ Name of equality (for the plugin's internal use, or for debugging)
   -> Role
-  -> TcType -- ^ LHS
-  -> TcType -- ^ RHS
+  -> DVarSet -- ^ Evidence that this proof term depends on (use e.g. 'ctEvId' for a Given)
+  -> TcType  -- ^ LHS
+  -> TcType  -- ^ RHS
   -> EvTerm
-mkPluginUnivEvTerm str role lhs rhs = evCoercion $ mkPluginUnivCo str role lhs rhs
+mkPluginUnivEvTerm str role deps lhs rhs =
+  evCoercion $ mkPluginUnivCo str role deps lhs rhs
 
 -- | Provide a rewriting of a saturated type family application
 -- at the given 'Role' ('Nominal' or 'Representational').
@@ -1035,14 +1065,15 @@ mkPluginUnivEvTerm str role lhs rhs = evCoercion $ mkPluginUnivCo str role lhs r
 -- The result can be passed to 'TcPluginRewriteTo' to specify the outcome
 -- of rewriting a type family application.
 mkTyFamAppReduction
-  :: String   -- ^ Name of reduction (for debugging)
-  -> Role     -- ^ Role of reduction ('Nominal' or 'Representational')
-  -> TyCon    -- ^ Type family 'TyCon'
-  -> [TcType] -- ^ Type family arguments
-  -> TcType   -- ^ The type that the type family application reduces to
+  :: String    -- ^ Name of reduction (for debugging)
+  -> Role      -- ^ Role of reduction ('Nominal' or 'Representational')
+  -> DVarSet   -- ^ Evidence that this reduction depends on (use e.g. 'ctEvId' for a Given)
+  -> TyCon     -- ^ Type family 'TyCon'
+  -> [TcType]  -- ^ Type family arguments
+  -> TcType    -- ^ The type that the type family application reduces to
   -> Reduction
-mkTyFamAppReduction str role tc args ty =
-  Reduction ( mkPluginUnivCo str role ( mkTyConApp tc args ) ty ) ty
+mkTyFamAppReduction str role deps tc args ty =
+  Reduction ( mkPluginUnivCo str role deps ( mkTyConApp tc args ) ty ) ty
 
 --------------------------------------------------------------------------------
 
