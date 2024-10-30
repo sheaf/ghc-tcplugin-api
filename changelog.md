@@ -1,6 +1,22 @@
+# Version 0.13.0.0 (2024-30-10)
+
+- Update to changes in the type of GHC's `mkUnivCo`
+  in order to (properly) add support for GHC 9.12.
+
+- Change `mkPluginUnivCo`, `mkPluginUnivEvTerm` and `mkTyFamAppReduction`
+  to take a `[Coercion]` rather than a `DVarSet` for specifying dependencies.
+
+- Stop re-exporting `DVarSet`, `emptyDVarSet`, `extendDVarSet`, `unionDVarSet`,
+  `unitDVarSet`, and `mkDVarSet`.
+
+- Update documentation to suggest using `ctEvCoercion`
+  rather than `ctEvId` to specify coercions that a `UnivCo` depends on.
+
+- Re-export `ctEvCoercion`, and stop re-exporting `ctEvId`.
+
 # Version 0.12.0.0 (2024-22-10)
 
-- Add support for GHC 9.12.
+- Add preliminary support for GHC 9.12.
 
 - `mkPluginUnivCo`, `mkPluginUnivEvTerm` and `mkTyFamAppReduction` now all take
   an additional `DVarSet` argument which allows specifying evidence that we
