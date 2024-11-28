@@ -322,7 +322,7 @@ module GHC.TcPlugin.API
 
     -- | The following functions allow plugins to create constraints
     -- for typeclasses and type equalities.
-  , mkClassPred, mkPrimEqPredRole
+  , mkClassPred, mkEqPredRole
 
     -- | === Deriveds
 
@@ -516,7 +516,7 @@ import GHC.Core.Class
 import GHC.Core.Coercion
   ( mkReflCo, mkSymCo, mkTransCo
   , mkUnivCo
-#if MIN_VERSION_ghc(8,10,0)
+#if !MIN_VERSION_ghc(9,13,0) && MIN_VERSION_ghc(8,10,0)
   , mkPrimEqPredRole
 #endif
   )
@@ -536,6 +536,9 @@ import GHC.Core.Make
 #endif
 import GHC.Core.Predicate
   ( EqRel(..)
+#if MIN_VERSION_ghc(9,13,0)
+  , mkEqPredRole
+#endif
 #if MIN_VERSION_ghc(8,10,0)
   , Pred(..)
 #else
@@ -1111,12 +1114,21 @@ mkVisFunTysMany = mkFunTys
 mkPiTy :: TyCoBinder -> Type -> Type
 mkPiTy bndr ty = mkPiTys [bndr] ty
 
--- | Makes a lifted equality predicate at the given role
-mkPrimEqPredRole :: Role -> Type -> Type -> PredType
-mkPrimEqPredRole Nominal          = mkPrimEqPred
-mkPrimEqPredRole Representational = mkReprPrimEqPred
-mkPrimEqPredRole Phantom          = panic "mkPrimEqPredRole phantom"
+#endif
+#endif
 
+--------------------------------------------------------------------------------
+
+#if !MIN_VERSION_ghc(9,13,0)
+-- | Makes an unlifted equality predicate at the given role
+-- (either 'Nominal' or 'Representational').
+mkEqPredRole :: Role -> Type -> Type -> PredType
+#if MIN_VERSION_ghc(8,10,0)
+mkEqPredRole = mkPrimEqPredRole
+#else
+mkEqPredRole Nominal          = mkPrimEqPred
+mkEqPredRole Representational = mkReprPrimEqPred
+mkEqPredRole Phantom          = panic "mkPrimEqPredRole phantom"
 #endif
 #endif
 
