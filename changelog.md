@@ -1,4 +1,10 @@
-# Version 0.13.0.0 (2024-30-10)
+
+# Version 0.14.0.0 (2024-11-28)
+
+- Rename `mkPrimEqPredRole` to `mkEqPredRole`. This is a re-exported function
+  from GHC, and the renaming adapts to the renaming in GHC-9.13.
+
+# Version 0.13.0.0 (2024-10-30)
 
 - Update to changes in the type of GHC's `mkUnivCo`
   in order to (properly) add support for GHC 9.12.
@@ -14,7 +20,7 @@
 
 - Re-export `ctEvCoercion`, and stop re-exporting `ctEvId`.
 
-# Version 0.12.0.0 (2024-22-10)
+# Version 0.12.0.0 (2024-10-22)
 
 - Add preliminary support for GHC 9.12.
 
