@@ -1,6 +1,9 @@
 {-# LANGUAGE CPP #-}
+
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE FlexibleInstances #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
@@ -64,7 +67,6 @@ module GHC.TcPlugin.API
     -- typeclass providing overloading (for operations that work in all stages).
   , TcPluginStage(..), MonadTcPlugin
   , TcPluginM
-  , tcPluginIO
 
     -- *** Emitting new work, and throwing type-errors
 
@@ -80,10 +82,23 @@ module GHC.TcPlugin.API
     -- | Name resolution is usually the first step in writing a type-checking plugin:
     -- plugins need to look up the names of the objects they want to manipulate.
     --
-    -- For instance, to lookup the type family @MyFam@ in module @MyModule@ in package @my-pkg@:
+    -- The most convenient way to look up a Name is to bring the name into scope
+    -- in the module defining the plugin, and use @TemplateHaskellQuotes@
+    -- in conjunction with the 'lookupTHName' function.
     --
-    -- > lookupMyModule :: MonadTcPlugin m => m Module
-    -- > lookupMyModule = do
+    -- > import Data.Maybe
+    -- >
+    -- > lookupMaybeTyCon :: MonadTcPluginM m => m TyCon
+    -- > lookupMaybeTyCon = lookupTHName ''Maybe >>= tcLookupTyCon
+    --
+    -- This is recommended over manually looking up the package and module
+    -- name, because the manual method does not robustly deal with re-exports;
+    -- one must specify the exact package/module which defines the identifier.
+    -- For instance, to manually lookup the type family @MyFam@ in module
+    -- @MyModule@ in package @my-pkg@:
+    --
+    -- > lookupMyFam :: MonadTcPluginM m => m Name
+    -- > lookupMyFam = do
     -- >    let modlName = mkModuleName "MyModule"
     -- >        pkgName  = Just $ fsLit "my-pkg"
     -- >    pkgQual    <- resolveImport      modlName pkgName
@@ -99,7 +114,14 @@ module GHC.TcPlugin.API
     -- to the other stages: the plugin initialisation is called only once in each module
     -- that the plugin is used, whereas the solver and rewriter are usually called repeatedly.
 
-    -- ** Packages and modules
+    -- ** Name resolution: TH method
+
+    -- | Look up a Name from a Template Haskell Name (e.g. a Name constructed
+    -- using TemplateHaskellQuotes).
+  , lookupTHName
+
+    -- ** Name resolution: manual method
+    -- *** Packages and modules
 
     -- | Use these functions to lookup a module,
     -- from the current package or imported packages.
@@ -107,23 +129,23 @@ module GHC.TcPlugin.API
   , unitIdFS, stringToUnitId, pkgQualToPkgName
   , Module, ModuleName, FindResult(..), UnitId, PkgQual
 
-    -- ** Names
+    -- *** Names
 
-    -- *** Occurence names
+    -- **** Occurence names
 
     -- | The most basic type of name is the 'OccName', which is a
     -- simple textual name within a namespace (e.g. the class namespace),
     -- without any disambiguation (no module qualifier, etc).
   , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
 
-    -- *** Names
+    -- **** Names
 
     -- | After having looked up the 'Module', we can obtain the full 'Name'
     -- referred to by an 'OccName'. This is fully unambiguous, as it
     -- contains a 'Unique' identifier for the name.
   , lookupOrig
 
-    -- *** 'TyCon', 'Class', 'DataCon', etc
+    -- ** Name resolution: resolving the Name to a 'TyCon', 'Class', 'DataCon', etc
 
     -- | Finally, we can obtain the actual objects we're interested in handling,
     -- such as classes, type families, data constructors... by looking them up
@@ -244,8 +266,12 @@ module GHC.TcPlugin.API
   , readTcRef, writeTcRef
 
     -- | == Some further functions for inspecting constraints
-  , eqType
+  , eqType, nonDetCmpType
   , ctLoc, ctEvidence, ctFlavour, ctEqRel, ctOrigin
+  , ctEvPred, ctEvId, ctEvExpr, ctEvLoc
+  , isGiven, isWanted
+  , isEqPred, isEqClassPred
+  , className, tyConName
 
     -- ** Constraint evidence
 
@@ -282,13 +308,11 @@ module GHC.TcPlugin.API
     -- by combining evidence that is already available.
 
   , mkPluginUnivEvTerm
-  , evDataConApp
+  , evDFunApp, evDataConApp
   , newEvVar, setEvBind
-  , evCoercion, evCast
-  , ctEvExpr
+  , evId, evCoercion, evCast
   , askEvBinds, lookupEvBind, eb_lhs, eb_rhs
   , newName, mkLocalId, mkTyVar
-  , ctev_pred, ctev_evar, ctev_loc, ctev_dest
 
     -- *** Class dictionaries
 
@@ -395,6 +419,7 @@ module GHC.TcPlugin.API
     -- ** Type literals (natural numbers, type-level strings)
   , mkNumLitTy, isNumLitTy
   , mkStrLitTy, isStrLitTy
+  , natKind, symbolKind, charKind
 
     -- ** Creating and decomposing applications
   , mkTyConTy, mkTyConApp, mkAppTy, mkAppTys
@@ -408,6 +433,8 @@ module GHC.TcPlugin.API
   , mkForAllTy, mkForAllTys
   , mkPiTy, mkPiTys
 
+    -- ** Kinds
+  , typeKind
 
 #if MIN_VERSION_ghc(9,0,0)
   , Mult
@@ -503,6 +530,19 @@ module GHC.TcPlugin.API
 -- ghc
 import GHC
   ( TyThing(..) )
+import GHC.Builtin.Names
+ ( hasKey
+ , eqPrimTyConKey, eqReprPrimTyConKey
+ , heqTyConKey, eqTyConKey, coercibleTyConKey
+ )
+import GHC.Builtin.Types
+  ( typeSymbolKind, charTy
+#if MIN_VERSION_ghc(9,1,0)
+  , naturalTy
+#else
+  , typeNatKind
+#endif
+  )
 #if !MIN_VERSION_ghc(9,0,0)
 import GHC.Builtin.Types
   ( intDataCon )
@@ -510,12 +550,12 @@ import GHC.Builtin.Types.Prim
   ( intPrimTy )
 #endif
 import GHC.Core
-  ( CoreBndr, CoreExpr, Expr(..) )
+  ( CoreBndr, CoreExpr, Expr(..), mkTyApps, mkApps )
 import GHC.Core.Class
   ( Class(..), FunDep )
 import GHC.Core.Coercion
   ( mkReflCo, mkSymCo, mkTransCo
-  , mkUnivCo
+  , mkUnivCo, isReflCo
 #if !MIN_VERSION_ghc(9,13,0) && MIN_VERSION_ghc(8,10,0)
   , mkPrimEqPredRole
 #endif
@@ -524,7 +564,7 @@ import GHC.Core.Coercion.Axiom
   ( Role(..) )
 import GHC.Core.DataCon
   ( DataCon
-  , classDataCon, promoteDataCon
+  , classDataCon, promoteDataCon, dataConWrapId
   )
 import GHC.Core.FamInstEnv
   ( FamInstEnv )
@@ -552,7 +592,7 @@ import GHC.Core.Reduction
   ( Reduction(..) )
 #endif
 import GHC.Core.TyCon
-  ( TyCon(..) )
+  ( TyCon(..), tyConClass_maybe )
 #if MIN_VERSION_ghc(9,6,0)
 import GHC.Core.TyCo.Compare
   ( eqType )
@@ -589,6 +629,7 @@ import GHC.Core.Type
   , mkAppTy, mkAppTys, isTyVarTy, getTyVar_maybe
   , mkCoercionTy, isCoercionTy, isCoercionTy_maybe
   , mkNumLitTy, isNumLitTy, mkStrLitTy, isStrLitTy
+  , typeKind
 #if !MIN_VERSION_ghc(9,6,0)
   , eqType
 #endif
@@ -600,6 +641,28 @@ import GHC.Core.Type
   )
 import GHC.Data.FastString
   ( FastString, fsLit, unpackFS )
+#if MIN_VERSION_ghc(9,5,0)
+import GHC.Plugins
+  ( thNameToGhcNameIO )
+#else
+import Data.Maybe
+  ( listToMaybe )
+#if MIN_VERSION_ghc(9,3,0)
+import GHC.Iface.Env
+  ( lookupNameCache )
+#else
+import GHC.Iface.Env
+  ( lookupOrigIO )
+#endif
+import GHC.ThToHs
+  ( thRdrNameGuesses )
+import GHC.Types.Name
+  ( isExternalName )
+import GHC.Types.Name.Reader
+  ( isExact_maybe, isOrig_maybe )
+import GHC.Utils.Monad
+  ( mapMaybeM )
+#endif
 import qualified GHC.Tc.Plugin
   as GHC
 #if MIN_VERSION_ghc(9,4,0)
@@ -628,6 +691,13 @@ import GHC.Tc.Types
 #if MIN_VERSION_ghc(9,11,0)
 import GHC.Tc.Types.CtLoc
   ( CtLoc(..), bumpCtLocDepth )
+#else
+import GHC.Tc.Types.Constraint
+  ( CtLoc(..), bumpCtLocDepth )
+#endif
+#if MIN_VERSION_ghc(9,13,0)
+import GHC.Tc.Types.Constraint
+  ( GivenCtEvidence(..) )
 #endif
 import GHC.Tc.Types.Constraint
   ( Ct(..), CtEvidence(..), CtFlavour(..)
@@ -635,14 +705,13 @@ import GHC.Tc.Types.Constraint
   , ctPred, ctLoc, ctEvidence, ctEvExpr
   , ctEvCoercion
   , ctFlavour, ctEqRel, ctOrigin
-  , mkNonCanonical
-#if !MIN_VERSION_ghc(9,11,0)
-  , CtLoc(..), bumpCtLocDepth
-#endif
+  , ctEvFlavour, ctEvPred, ctEvLoc
+  , mkNonCanonical, ctEvId
   )
 import GHC.Tc.Types.Evidence
   ( EvBind(..), EvTerm(..), EvExpr, EvBindsVar(..)
-  , evCoercion, evCast, lookupEvBind, evDataConApp
+  , evCoercion, lookupEvBind
+  , mkGivenEvBind, evId
   )
 import GHC.Tc.Types.Origin
   ( CtOrigin(..) )
@@ -654,6 +723,7 @@ import qualified GHC.Tc.Utils.Monad
 import GHC.Tc.Utils.TcType
   ( TcType, TcLevel, MetaDetails, MetaInfo
   , isSkolemTyVar, isMetaTyVar
+  , nonDetCmpType
   )
 import GHC.Tc.Utils.TcMType
   ( isFilledMetaTyVar_maybe, writeMetaTyVar )
@@ -673,15 +743,20 @@ import GHC.Types.Name.Occurrence
   ( OccName(..)
   , mkVarOcc, mkDataOcc, mkTyVarOcc, mkTcOcc, mkClsOcc
   )
-#if MIN_VERSION_ghc(9,3,0)
-import GHC
+#if MIN_VERSION_ghc(9,1,0)
+import GHC.Driver.Env.Types
   ( HscEnv )
+#else
+import GHC.Driver.Types
+  ( HscEnv )
+#endif
+#if MIN_VERSION_ghc(9,3,0)
+import GHC.Driver.Env.Types
+  ( hsc_unit_env, hsc_NC )
 import GHC.Types.PkgQual
   ( PkgQual(..) )
 import GHC.Rename.Names
   ( renamePkgQual )
-import GHC.Driver.Env
-  ( hsc_unit_env )
 import GHC.Unit.Module
   ( unitIdString )
 #elif MIN_VERSION_ghc(9,1,0)
@@ -707,16 +782,15 @@ import GHC.Types.Unique.DFM
   ( UniqDFM, lookupUDFM, lookupUDFM_Directly, elemUDFM )
 import GHC.Types.Var
   ( TyVar, CoVar, TcTyVar, EvVar
-  , mkTyVar
+  , mkTyVar, DFunId
   )
 import GHC.Utils.Outputable
-  ( Outputable(..), SDoc
-#if !MIN_VERSION_ghc(9,2,0)
-  , panic, pprPanic
-#endif
-  )
+  ( Outputable(..), SDoc, text )
 #if MIN_VERSION_ghc(9,2,0)
 import GHC.Utils.Panic
+  ( panic, pprPanic )
+#else
+import GHC.Utils.Outputable
   ( panic, pprPanic )
 #endif
 #if MIN_VERSION_ghc(9,2,0)
@@ -742,21 +816,20 @@ import GHC.Utils.Misc
   ( HasDebugCallStack )
 #endif
 
--- transformers
-import Control.Monad.IO.Class
-  ( MonadIO ( liftIO ) )
-
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API.Internal
 #ifndef HAS_REWRITING
 import GHC.TcPlugin.API.Internal.Shim
 #endif
 
---------------------------------------------------------------------------------
+-- template-haskell
+import qualified Language.Haskell.TH as TH
 
--- | Run an 'IO' computation within the plugin.
-tcPluginIO :: MonadTcPlugin m => IO a -> m a
-tcPluginIO = unsafeLiftTcM . liftIO
+-- transformers
+import Control.Monad.IO.Class
+  ( MonadIO ( liftIO ) )
+
+--------------------------------------------------------------------------------
 
 -- | Output some debugging information within the plugin.
 tcPluginTrace :: MonadTcPlugin m
@@ -887,10 +960,8 @@ tcLookupId = liftTcPluginM . GHC.tcLookupId
 
 --------------------------------------------------------------------------------
 
-#if MIN_VERSION_ghc(9,3,0)
 getTopEnv :: MonadTcPlugin m => m HscEnv
 getTopEnv = liftTcPluginM GHC.getTopEnv
-#endif
 
 -- | Obtain the current global and local type-checking environments.
 getEnvs :: MonadTcPlugin m => m ( TcGblEnv, TcLclEnv )
@@ -950,6 +1021,18 @@ zonkCt = liftTcPluginM . GHC.zonkCt
 
 --------------------------------------------------------------------------------
 
+-- | Is this a "Given" constraint?
+isGiven :: CtEvidence -> Bool
+isGiven ev = case ctEvFlavour ev of
+  Given {} -> True
+  _ -> False
+
+-- | Is this a "Wanted" constraint?
+isWanted :: CtEvidence -> Bool
+isWanted = not . isGiven
+
+--------------------------------------------------------------------------------
+
 -- | Create a new Wanted constraint.
 --
 -- Requires a location (so that error messages can say where the constraint came from,
@@ -967,15 +1050,19 @@ newWanted loc pty =
 -- | Create a new Given constraint.
 --
 -- Unlike 'newWanted', we need to supply evidence for this constraint.
-newGiven :: CtLoc -> PredType -> EvExpr -> TcPluginM Solve CtEvidence
+newGiven :: CtLoc -> PredType -> EvTerm -> TcPluginM Solve CtEvidence
 newGiven loc pty evtm = do
-#if HAS_REWRITING
-  tc_evbinds <- askEvBinds
-  liftTcPluginM $ GHC.newGiven tc_evbinds loc pty evtm
-#else
-  liftTcPluginM $ GHC.newGiven loc pty evtm
+   new_ev <- newEvVar pty
+   setEvBind $ mkGivenEvBind new_ev evtm
+   return $
+      CtGiven
+#if MIN_VERSION_ghc(9,13,0)
+        $ GivenCt
 #endif
-
+        { ctev_pred = pty
+        , ctev_evar = new_ev
+        , ctev_loc = loc
+        }
 
 -- | Obtain the 'CtLoc' from a 'RewriteEnv'.
 --
@@ -1078,7 +1165,9 @@ mkTyFamAppReduction
   -> TcType     -- ^ The type that the type family application reduces to
   -> Reduction
 mkTyFamAppReduction str role deps tc args ty =
-  Reduction ( mkPluginUnivCo str role deps ( mkTyConApp tc args ) ty ) ty
+  Reduction
+    ( mkPluginUnivCo str role deps ( mkTyConApp tc args ) ty )
+    ty
 
 --------------------------------------------------------------------------------
 
@@ -1145,6 +1234,123 @@ getInertSet = getTcSInerts
 
 setInertSet :: InertSet -> TcS ()
 setInertSet = setTcSInerts
+#endif
+
+--------------------------------------------------------------------------------
+
+-- | Resolve a @template-haskell@ 'TH.Name' to a GHC 'Name'.
+--
+-- Especially useful in conjunction with @TemplateHaskellQuotes@, e.g. to
+-- look up the 'Name' of the @Maybe@ type constructor, you can do:
+--
+--  > lookupName ''Maybe
+--
+-- @since 0.15.0.0
+lookupTHName :: ( Monad (TcPluginM s), MonadTcPlugin (TcPluginM s) )
+             => TH.Name -> TcPluginM s Name
+lookupTHName thNm = do
+  hscEnv <- getTopEnv
+  mbNm <-
+    liftIO $
+      thNameToGhcNameIO
+#if MIN_VERSION_ghc(9,6,0)
+        (hsc_NC hscEnv)
+#else
+        hscEnv
+#endif
+        thNm
+  case mbNm of
+    Just nm ->
+      return nm
+    Nothing ->
+      pprPanic "lookupTHName: lookup failed" (text $ show thNm)
+
+--------------------------------------------------------------------------------
+
+-- | Apply an instance dictionary function to type and value arguments.
+--
+-- NB: different from @evDFunApp@ defined in GHC, as this function returns
+-- an @EvExpr@ rather than an @EvTerm@.
+evDFunApp :: DFunId -> [Type] -> [EvExpr] -> EvExpr
+evDFunApp df tys ets = Var df `mkTyApps` tys `mkApps` ets
+
+-- | Apply a data constructor to type and value arguments.
+--
+-- NB: different from @evDataConApp@ defined in GHC, as this function returns
+-- an @EvExpr@ rather than an @EvTerm@.
+evDataConApp :: DataCon -> [Type] -> [EvExpr] -> EvExpr
+evDataConApp dc tys ets = evDFunApp (dataConWrapId dc) tys ets
+
+-- | Cast an evidence expression by a coercion.
+--
+-- NB: different from @evCast@ defined in GHC, as this function returns
+-- an @EvExpr@ rather than an @EvTerm@.
+evCast :: EvExpr -> Coercion -> EvExpr
+evCast et co | isReflCo co = et
+             | otherwise   = Cast et co
+
+--------------------------------------------------------------------------------
+
+natKind, symbolKind, charKind :: Type
+natKind =
+#if MIN_VERSION_ghc(9,1,0)
+  naturalTy
+#else
+  typeNatKind
+#endif
+symbolKind = typeSymbolKind
+charKind = charTy
+
+--------------------------------------------------------------------------------
+
+-- | Is this a primitive (unboxed) equality type, i.e. one of:
+--
+--  - @~#@ (heterogeneous nominal unboxed equality),
+--  - @~R#@ (heterogeneous representational unboxed equality).
+--
+-- NB: returns @False@ for **boxed** equalities such as @(~)@, @(~~)@ and @Coercible@.
+-- If you want to detect those, use 'isEqClassPred'.
+isEqPred :: PredType -> Bool
+isEqPred pty
+  | Just tc <- tyConAppTyCon_maybe pty
+  = tc `hasKey` eqPrimTyConKey || tc `hasKey` eqReprPrimTyConKey
+  | otherwise
+  = False
+
+-- | Is this a boxed equality type, i.e. one of:
+--
+--  - @(~)@ (homogeneous nominal boxed equality),
+--  - @(~~)@ (heterogeneous nominal boxed equality),
+--  - @Coercible@ (homogeneous boxed representational equality).
+isEqClassPred :: PredType -> Bool
+isEqClassPred pty
+  | Just tc <- tyConAppTyCon_maybe pty
+  , Just cls <- tyConClass_maybe tc
+  =    cls `hasKey` heqTyConKey
+    || cls `hasKey` eqTyConKey
+    || cls `hasKey` coercibleTyConKey
+  | otherwise
+  = False
+
+--------------------------------------------------------------------------------
+
+#if !MIN_VERSION_ghc(9,6,0)
+thNameToGhcNameIO :: HscEnv -> TH.Name -> IO (Maybe Name)
+thNameToGhcNameIO hscEnv th_name
+  =  do { names <- mapMaybeM do_lookup (thRdrNameGuesses th_name)
+        ; return (listToMaybe names) }
+  where
+    do_lookup rdr_name
+      | Just n <- isExact_maybe rdr_name
+      = return $ if isExternalName n then Just n else Nothing
+      | Just (rdr_mod, rdr_occ) <- isOrig_maybe rdr_name
+#if MIN_VERSION_ghc(9,3,0)
+      = Just <$> lookupNameCache (hsc_NC hscEnv) rdr_mod rdr_occ
+#else
+      = Just <$> lookupOrigIO hscEnv rdr_mod rdr_occ
+#endif
+      | otherwise
+      = return Nothing
 #endif
 
 --------------------------------------------------------------------------------

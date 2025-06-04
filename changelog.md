@@ -1,3 +1,38 @@
+# Version 0.15.0.0 (2025-06-03)
+
+- Remove `tcPluginIO` in favour of new `MonadIO` instance.  
+  To migrate, use `liftIO` instead of `tcPluginIO`.
+
+- Add `lookupTHName` function, which allows looking up Template Haskell names
+  in typechecker plugins. Useful in conjunction with `TemplateHaskellQuotes`.
+
+- Helper functions to construct evidence terms have been adjusted to return
+  values of type `EvExpr`, rather than `EvTerm`. This makes the functions more
+  composable, and allows typechecker plugin to provide evidence for quantified
+  constraints more easily.
+
+  Affected functions: `evDFunApp`, `evDataConApp`, `evCast`.
+
+  To migrate, you will need to manually wrap evidence terms with the
+  `EvExpr` constructor in places that expect an `EvTerm`.
+
+- Added `natKind`, `symbolKind` and `charKind` for the kinds of type-level
+  `Nat`, `Symbol` and `Char`.
+
+- Added several re-exports from the `ghc` library:
+  - `isGiven` & `isWanted`.
+  - `ctEvPred`, `ctEvId`, `ctEvExpr` and `ctEvLoc`.
+  - `className` & `tyConName`.
+  - `isEqPred` (unboxed equality) and `isEqClassPred` (boxed equality).
+  - `evId` & `ctEvId`.
+  - `typeKind`.
+  - `nonDetCmpType`.
+
+- Removed re-exports of `ctev_pred`, `ctev_loc`, `ctev_evar`, and `ctev_dest`.
+
+  Migration: use `ctEvPred` instead of `ctev_pred` and `ctEvLoc` instead of `ctev_loc`.
+  Uses of `ctev_evar` and `ctev_dest` should be covered by `ctEvEvId` and/or
+  `ctEvExpr`.
 
 # Version 0.14.0.0 (2024-11-28)
 

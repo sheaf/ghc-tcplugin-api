@@ -34,13 +34,26 @@ usecase using this library's interface. This can be particularly useful when usi
 
 ## Compatibility
 
-This library provides a unified interface that works across different GHC versions (starting from GHC 8.8),
-aiming to reduce the CPP burden imposed on authors of type-checking plugins.    
+This library provides a unified interface that works across different GHC versions
+(starting from GHC 8.8), aiming to reduce the CPP burden imposed on authors of type-checking plugins.    
 
-We make use of GHC's new API for rewriting type-families in typechecker plugins,
-which was part of GHC 9.4.    
-A compatibility layer is provided, which retro-fits the rewriting functionality onto
-previous versions of GHC.
+This library aims to reflect the API and functionality of the **most recent**
+version of GHC, providing backwards compatibility shims for older versions of GHC.
+
+For example, we make use of GHC's new API for rewriting type-families in
+typechecker plugins, which was part of GHC 9.4. A compatibility layer is provided,
+which retro-fits the rewriting functionality onto previous versions of GHC.
+
+This reflects a key design principle of this library: we want the API provided
+by this library to include important changes from GHC, in particular correctness
+fixes such as tracking dependent Givens when constructing coercions
+([GHC issue #23923](https://gitlab.haskell.org/ghc/ghc/-/issues/23923)).
+
+As such, you can expect that upgrading to a new version of this library **will**
+incur breaking changes, as `ghc-tcplugin-api` itself changes to reflect the
+changes in GHC. The value proposition of `ghc-tcplugin-api` is that it handles
+backwards compatibility concerns, saving you the hassle of mountains of CPP – or
+other manners of conditional compilation.
 
 ## Documentation
 

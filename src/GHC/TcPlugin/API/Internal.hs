@@ -69,6 +69,8 @@ import GHC.TypeLits
   ( TypeError, ErrorMessage(..) )
 
 -- transformers
+import Control.Monad.IO.Class
+  ( MonadIO ( liftIO ) )
 import Control.Monad.Trans.Reader
   ( ReaderT(..) )
 
@@ -464,6 +466,10 @@ mkTcPlugin ( TcPlugin
     adaptUserStop :: ( userDefs -> TcPluginM Stop () ) -> TcPluginDefs userDefs -> GHC.TcPluginM ()
     adaptUserStop userStop ( TcPluginDefs { tcPluginUserDefs } ) =
       tcPluginStopM $ userStop tcPluginUserDefs
+
+-- | @since 0.15.0.0
+instance ( Monad ( TcPluginM s ), MonadTcPlugin ( TcPluginM s ) ) => MonadIO ( TcPluginM s ) where
+  liftIO = unsafeLiftTcM . liftIO
 
 -- | Monads for type-checking plugins which are able to emit new constraints
 -- and throw errors.

@@ -1,12 +1,12 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.14.0.0
+version:        0.15.0.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
 author:         Sam Derbyshire
 maintainer:     Sam Derbyshire
-copyright:      2021-2024 Sam Derbyshire
+copyright:      2021-2025 Sam Derbyshire
 homepage:       https://github.com/sheaf/ghc-tcplugin-api
 category:       Type System, GHC, Plugin
 description:
@@ -37,9 +37,11 @@ library
     containers
       >= 0.6    && < 0.8,
     ghc
-      >= 8.8    && < 9.14,
+      >= 8.8    && < 9.16,
     transformers
       >= 0.5    && < 0.7,
+    template-haskell
+      >= 2.15   && < 2.25,
 
   default-language:
     Haskell2010
@@ -71,6 +73,11 @@ library
     , GHC.Types.Unique.Set
     , GHC.Types.Unique.DSet
     , GHC.Utils.Outputable
+
+  if impl(ghc >= 9.13.0)
+    -- Don't warn on exports of the form "pattern ClassPred".
+    -- We can migrate to using "data" when that becomes necessary.
+    ghc-options: -Wno-pattern-namespace-specifier
 
   if impl(ghc >= 9.3.0)
     cpp-options: -DHAS_REWRITING
@@ -110,6 +117,8 @@ library
         , DynFlags   as GHC.Driver.Session
         , HscTypes   as GHC.Driver.Types
 
+        , IfaceEnv   as GHC.Iface.Env
+
         , GhcPlugins as GHC.Plugins
 
         , TcPluginM  as GHC.Tc.Plugin
@@ -125,6 +134,7 @@ library
         , Literal    as GHC.Types.Literal
         , Name       as GHC.Types.Name
         , OccName    as GHC.Types.Name.Occurrence
+        , RdrName    as GHC.Types.Name.Reader
         , SrcLoc     as GHC.Types.SrcLoc
         , Unique     as GHC.Types.Unique
         , UniqDFM    as GHC.Types.Unique.DFM
@@ -152,6 +162,7 @@ library
           ( Predicate  as GHC.Core.Predicate
           , Constraint as GHC.Tc.Types.Constraint
           , TcOrigin   as GHC.Tc.Types.Origin
+          , GHC.ThToHs as GHC.ThToHs
           )
 
     else
@@ -161,4 +172,5 @@ library
           ( Type      as GHC.Core.Predicate
           , TcRnTypes as GHC.Tc.Types.Constraint
           , TcRnTypes as GHC.Tc.Types.Origin
+          , Convert   as GHC.ThToHs
           )
