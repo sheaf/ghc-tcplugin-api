@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.15.0.0
+version:        0.16.0.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
@@ -33,15 +33,15 @@ library
 
   build-depends:
     base
-      >= 4.13.0 && < 4.22,
+      >= 4.13.0 && < 4.23,
     containers
-      >= 0.6    && < 0.8,
+      >= 0.6    && < 0.9,
     ghc
       >= 8.8    && < 9.16,
     transformers
       >= 0.5    && < 0.7,
     template-haskell
-      >= 2.15   && < 2.25,
+      >= 2.15   && < 2.26,
 
   default-language:
     Haskell2010
@@ -60,6 +60,8 @@ library
   exposed-modules:
     GHC.TcPlugin.API,
     GHC.TcPlugin.API.Names,
+    GHC.TcPlugin.API.TyConSubst,
+
     GHC.TcPlugin.API.Internal
 
   reexported-modules:

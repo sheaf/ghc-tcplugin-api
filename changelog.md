@@ -1,3 +1,16 @@
+
+# Version 0.16.0.0 (2025-06-10)
+
+- Re-export `tyConDataCons`, `tyConSingleDataCon_maybe`,
+  `tyConSingleDataCon`, `dataConTyCon`, `isNewTyCon` and `isNewDataCon`
+  from GHC.
+
+- The `isWanted` function now correctly returns `False` for derived
+  constraints. This is only relevant for GHC 9.2 and below.
+
+- Add `GHC.TcPlugin.API.TyConSubst` module, which implements logic for
+  recognising when a type is a `TyConApp` up to Given constraints.
+
 # Version 0.15.0.0 (2025-06-03)
 
 - Remove `tcPluginIO` in favour of new `MonadIO` instance.  
