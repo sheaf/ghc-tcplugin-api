@@ -70,8 +70,11 @@ import GHC.Tc.Types.Constraint
 -------------------------------------------------------------------------------}
 
 -- | Substitution for recognizing 'TyCon' applications modulo equalities
---
--- During constraint solving the set of " given " constraints includes so-called
+data TyConSubst = TyConSubst {
+      tyConSubstMap :: Map TcTyVar (NonEmpty (TyCon, [Type]))
+    , tyConSubstCanon :: Map TcTyVar TcTyVar
+    }
+-- During constraint solving the set of Given constraints includes so-called
 -- "canonical equalities": equalities of the form
 --
 -- > var ~ typ                  (CTyEqCan)
@@ -122,15 +125,6 @@ import GHC.Tc.Types.Constraint
 --
 -- If @t == t'@, we can conclude that the arguments are equal only if @t@ is
 -- injective.
-data TyConSubst = TyConSubst {
-      -- | Mapping from (canonical) variables to 'TyCon' applications
-      tyConSubstMap :: Map TcTyVar (NonEmpty (TyCon, [Type]))
-
-      -- | Map each variable to the canonical representative
-      --
-      -- See 'Classified' for a detailed discussion of canonical variables.
-    , tyConSubstCanon :: Map TcTyVar TcTyVar
-    }
 
 {-------------------------------------------------------------------------------
   Basic functionality for working with 'TyConSubst'
