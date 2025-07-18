@@ -75,3 +75,9 @@ jobs:
         if: matrix.cfg.ghc != '8.8.4'
         working-directory: ./examples/SystemF
         run: cabal build system-f
+
+      - name: Build and lint equality saturation example
+        # Only run this test on 9.12 for now.
+        if: matrix.cfg.ghc == '9.12.2'
+        working-directory: ./examples/EqSat
+        run: cabal build eq-sat

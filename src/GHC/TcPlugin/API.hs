@@ -11,6 +11,10 @@
 {-# LANGUAGE PatternSynonyms #-}
 {-# LANGUAGE UndecidableInstances #-}
 
+#if !MIN_VERSION_ghc(8,11,0)
+{-# OPTIONS_GHC -Wno-orphans #-}
+#endif
+
 {-|
 Module: GHC.TcPlugin.API
 
@@ -426,6 +430,11 @@ module GHC.TcPlugin.API
   , splitTyConApp_maybe
   , tyConAppTyConPicky_maybe, tyConAppTyCon_maybe
   , splitAppTy_maybe, splitAppTys
+  , isNewTyCon, dataConTyCon
+
+    -- ** Data constructors
+  , tyConDataCons, tyConSingleDataCon_maybe, tyConSingleDataCon
+  , isNewDataCon
 
     -- ** Function types
   , mkVisFunTyMany, mkVisFunTysMany
@@ -527,6 +536,14 @@ module GHC.TcPlugin.API
   )
   where
 
+-- base
+import Prelude
+  hiding ( cos )
+#if !MIN_VERSION_ghc(8,11,0)
+import Data.List.NonEmpty
+  ( NonEmpty(..) )
+#endif
+
 -- ghc
 import GHC
   ( TyThing(..) )
@@ -565,6 +582,10 @@ import GHC.Core.Coercion.Axiom
 import GHC.Core.DataCon
   ( DataCon
   , classDataCon, promoteDataCon, dataConWrapId
+  , dataConTyCon
+#if MIN_VERSION_ghc(9,1,0)
+  , isNewDataCon
+#endif
   )
 import GHC.Core.FamInstEnv
   ( FamInstEnv )
@@ -592,7 +613,10 @@ import GHC.Core.Reduction
   ( Reduction(..) )
 #endif
 import GHC.Core.TyCon
-  ( TyCon(..), tyConClass_maybe )
+  ( TyCon(..), tyConClass_maybe
+  , tyConDataCons, tyConSingleDataCon_maybe, tyConSingleDataCon
+  , isNewTyCon
+  )
 #if MIN_VERSION_ghc(9,6,0)
 import GHC.Core.TyCo.Compare
   ( eqType )
@@ -1029,7 +1053,9 @@ isGiven ev = case ctEvFlavour ev of
 
 -- | Is this a "Wanted" constraint?
 isWanted :: CtEvidence -> Bool
-isWanted = not . isGiven
+isWanted ev = case ctEvFlavour ev of
+  Wanted {} -> True
+  _ -> False
 
 --------------------------------------------------------------------------------
 
@@ -1219,6 +1245,18 @@ mkEqPredRole Nominal          = mkPrimEqPred
 mkEqPredRole Representational = mkReprPrimEqPred
 mkEqPredRole Phantom          = panic "mkPrimEqPredRole phantom"
 #endif
+#endif
+
+--------------------------------------------------------------------------------
+
+#if !MIN_VERSION_ghc(9,1,0)
+isNewDataCon :: DataCon -> Bool
+isNewDataCon dc = isNewTyCon (dataConTyCon dc)
+#endif
+
+#if !MIN_VERSION_ghc(8,11,0)
+instance Outputable a => Outputable (NonEmpty a) where
+  ppr (x :| xs) = ppr (x : xs)
 #endif
 
 --------------------------------------------------------------------------------
