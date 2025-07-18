@@ -11,7 +11,7 @@
 Module: GHC.TcPlugin.API.TyConSubst
 
 This module provides functionality for recognising whether a type is a
-'TyConApp' while taking into account Given constraints.
+'TyConApp' while taking into account Given nominal equalities.
 
 In particular, this allows dealing with flattening variables on older GHC versions
 (9.0 and below). For example, instead of @[W] m + n ~ n + m@, older GHCs might
@@ -23,9 +23,14 @@ Usage:
 
   - Use 'mkTyConSubst' to create a 'TyConSubst' from Givens.
   - Use 'splitTyConApp_upTo' to compute whether a type is a 'TyConApp', taking
-    into account the Givens (in the form of the 'TyConSubst').
+    into account Given constraints (in the form of the 'TyConSubst').
 
-Note that 'splitTyConApp_upTo' will also look through type synonyms.
+Notes:
+
+  - 'splitTyConApp_upTo' will also look through type synonyms,
+  - 'splitTyConApp_upTo' only takes into account nominal equalities.
+    Please open a ticket if you have a need for rewriting modulo representational
+    equalities.
 
 -}
 module GHC.TcPlugin.API.TyConSubst (
@@ -69,7 +74,7 @@ import GHC.Tc.Types.Constraint
   <https://hackage.haskell.org/package/union-find>?
 -------------------------------------------------------------------------------}
 
--- | Substitution for recognizing 'TyCon' applications modulo equalities
+-- | Substitution for recognizing 'TyCon' applications modulo nominal equalities.
 data TyConSubst = TyConSubst {
       tyConSubstMap :: Map TcTyVar (NonEmpty (TyCon, [Type]))
     , tyConSubstCanon :: Map TcTyVar TcTyVar
@@ -164,7 +169,7 @@ tyConSubstExtend new subst@TyConSubst{..} = subst {
   Classification
 -------------------------------------------------------------------------------}
 
--- | Classified canonical equality constraints
+-- | Classified canonical nominal equality constraints.
 --
 -- The first step in the construction of the 'TyConSubst' is to classify the
 -- available canonical equalities as one of three categories, defined below.
@@ -221,7 +226,7 @@ reconsider var (var', args) = mempty {
       classifiedReconsider = [(var, (var', args))]
     }
 
--- | Classify a set of given constraints
+-- | Classify a set of Given constraints.
 --
 -- See 'Classified' for details.
 classify :: [Ct] -> Classified
@@ -231,7 +236,7 @@ classify = go mempty
     go acc []     = acc
     go acc (c:cs) =
         case isCanonicalVarEq c of
-          Just (var, splitAppTys -> (fn, args))
+          Just (var, splitAppTys -> (fn, args), NomEq)
             | Just tyCon <- tyConAppTyCon_maybe fn ->
                 go (productive var (tyCon, args) <> acc) cs
             | Just var' <- getTyVar_maybe fn, null args ->
@@ -245,7 +250,7 @@ classify = go mempty
   Processing
 -------------------------------------------------------------------------------}
 
--- | Construct 'TyCon' substitution from classified equality constraints
+-- | Construct 'TyCon' substitution from classified nominal equality constraints.
 --
 -- The difficult part in constructing this substitution are the equalities of
 -- the form @var1 ~ var2 args@, which we ear-marked as "to reconsider" during
@@ -352,33 +357,34 @@ instance Outputable TyConSubst where
   Canonical equalities
 -------------------------------------------------------------------------------}
 
-isCanonicalVarEq :: Ct -> Maybe (TcTyVar, Type)
+isCanonicalVarEq :: Ct -> Maybe (TcTyVar, Type, EqRel)
 isCanonicalVarEq = \case
 #if __GLASGOW_HASKELL__ < 902
-    CTyEqCan { cc_tyvar, cc_rhs } ->
-      Just (cc_tyvar, cc_rhs)
+    CTyEqCan { cc_tyvar, cc_rhs, cc_eq_rel } ->
+      Just (cc_tyvar, cc_rhs, cc_eq_rel)
     CFunEqCan { cc_fsk, cc_fun, cc_tyargs } ->
-      Just (cc_fsk, mkTyConApp cc_fun cc_tyargs)
+      Just (cc_fsk, mkTyConApp cc_fun cc_tyargs, NomEq)
     _otherwise    -> Nothing
 #elif __GLASGOW_HASKELL__ < 907
-    CEqCan { cc_lhs, cc_rhs }
+    CEqCan { cc_lhs, cc_rhs, cc_eq_rel }
       | TyVarLHS var <- cc_lhs
-      -> Just (var, cc_rhs)
+      -> Just (var, cc_rhs, cc_eq_rel)
       | TyFamLHS tyCon args <- cc_lhs
       , Just var            <- getTyVar_maybe cc_rhs
-      -> Just (var, mkTyConApp tyCon args)
+      -> Just (var, mkTyConApp tyCon args, NomEq)
     _otherwise
       -> Nothing
 #else
     CEqCan eqCt
       | TyVarLHS var <- lhs
-      -> Just (var, rhs)
+      -> Just (var, rhs, rel)
       | TyFamLHS tyCon args <- lhs
       , Just var            <- getTyVar_maybe rhs
-      -> Just (var, mkTyConApp tyCon args)
+      -> Just (var, mkTyConApp tyCon args, rel)
       where
         lhs = eq_lhs eqCt
         rhs = eq_rhs eqCt
+        rel = eq_eq_rel eqCt
     _otherwise
       -> Nothing
 #endif

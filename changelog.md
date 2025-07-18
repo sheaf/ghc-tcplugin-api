@@ -1,5 +1,12 @@
 
-# Version 0.16.0.0 (2025-06-10)
+# Version 0.16.1.0 (2025-07-18)
+
+- Correctness fix for the `GHC.TcPlugin.API.TyConSubst` module: ensure that
+  the `TyConSubst` does not mistake representational Given equalities for
+  nominal equalities. For the time being, the `splitTyConApp_upTo` functionality
+  only works at nominal role.
+
+# Version 0.16.0.0 (2025-07-18)
 
 - Re-export `tyConDataCons`, `tyConSingleDataCon_maybe`,
   `tyConSingleDataCon`, `dataConTyCon`, `isNewTyCon` and `isNewDataCon`
