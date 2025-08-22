@@ -237,8 +237,8 @@ classify = go mempty
     go acc (c:cs) =
         case isCanonicalVarEq c of
           Just (var, splitAppTys -> (fn, args), NomEq)
-            | Just tyCon <- tyConAppTyCon_maybe fn ->
-                go (productive var (tyCon, args) <> acc) cs
+            | Just (tyCon, inner) <- splitTyConApp_maybe fn ->
+                go (productive var (tyCon, inner ++ args) <> acc) cs
             | Just var' <- getTyVar_maybe fn, null args ->
                 go (extendEquivClass var var' <> acc) cs
             | Just var' <- getTyVar_maybe fn, x:xs <- args ->
@@ -333,8 +333,8 @@ mkTyConSubst = process . classify
 splitTyConApp_upTo :: TyConSubst -> Type -> Maybe (NonEmpty (TyCon, [Type]))
 splitTyConApp_upTo subst typ = asum [
       -- Direct match
-      do tyCon <- tyConAppTyCon_maybe fn
-         return ((tyCon, args) :| [])
+      do (tyCon, inner) <- splitTyConApp_maybe fn
+         return ((tyCon, inner ++ args) :| [])
 
       -- Indirect match
     , do var <- getTyVar_maybe fn

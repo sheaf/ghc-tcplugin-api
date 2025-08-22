@@ -1,3 +1,7 @@
+# Version 0.16.1.0 (2025-08-22)
+
+- `splitTyConApp_upTo` now correctly splits apart type families. This ensures
+  it is a valid drop-in replacement for `splitTyConApp_maybe` (fixes issue #13).
 
 # Version 0.16.1.0 (2025-07-18)
 
