@@ -1,4 +1,10 @@
-# Version 0.16.1.0 (2025-08-22)
+# Version 0.17.0.0 (2025-08-25)
+
+- `splitTyConApp_upTo` now additionally returns a `[Coercion]` for tracking
+  Given dependencies (which should be passed to functions such as `mkPluginUnivCo`,
+  `mkPluginUnivEvTerm` and `mkTyFamAppReduction`).
+
+# Version 0.16.2.0 (2025-08-22)
 
 - `splitTyConApp_upTo` now correctly splits apart type families. This ensures
   it is a valid drop-in replacement for `splitTyConApp_maybe` (fixes issue #13).

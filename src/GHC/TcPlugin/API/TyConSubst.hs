@@ -48,6 +48,10 @@ import Data.Foldable
 import Data.List.NonEmpty
   ( NonEmpty(..) )
 
+-- array
+import qualified Data.Array as Array
+  ( (!) )
+
 -- containers
 import Data.Graph
   ( Graph, Vertex )
@@ -76,8 +80,8 @@ import GHC.Tc.Types.Constraint
 
 -- | Substitution for recognizing 'TyCon' applications modulo nominal equalities.
 data TyConSubst = TyConSubst {
-      tyConSubstMap :: Map TcTyVar (NonEmpty (TyCon, [Type]))
-    , tyConSubstCanon :: Map TcTyVar TcTyVar
+      tyConSubstMap :: Map TcTyVar (NonEmpty (TyCon, [Type], [Coercion]))
+    , tyConSubstCanon :: Map TcTyVar (TcTyVar, [Coercion])
     }
 -- During constraint solving the set of Given constraints includes so-called
 -- "canonical equalities": equalities of the form
@@ -139,31 +143,36 @@ data TyConSubst = TyConSubst {
 --
 -- The canonical variables map is established once when the initial substitution
 -- is generated and not updated thereafter.
-tyConSubstEmpty :: Map TcTyVar TcTyVar -> TyConSubst
+tyConSubstEmpty :: Map TcTyVar (TcTyVar, [Coercion]) -> TyConSubst
 tyConSubstEmpty canon = TyConSubst {
       tyConSubstMap   = Map.empty
     , tyConSubstCanon = canon
     }
 
 -- | Lookup a variable in the substitution
-tyConSubstLookup :: TcTyVar -> TyConSubst -> Maybe (NonEmpty (TyCon, [Type]))
-tyConSubstLookup var TyConSubst{..} = Map.lookup var' tyConSubstMap
+tyConSubstLookup :: TcTyVar -> TyConSubst -> Maybe (NonEmpty (TyCon, [Type], [Coercion]))
+tyConSubstLookup var TyConSubst{..} =
+  fmap ( \ (tc, tys, deps) -> (tc, tys, deps ++ deps')) <$> Map.lookup var' tyConSubstMap
   where
     var' :: TcTyVar
-    var' = canonicalize tyConSubstCanon var
+    deps' :: [Coercion]
+    (var', deps') = canonicalize tyConSubstCanon var
 
 -- | Extend substitution with new bindings
 tyConSubstExtend ::
-     [(TcTyVar, (TyCon, [Type]))]
+     [(TcTyVar, (TyCon, [Type]), [Coercion])]
   -> TyConSubst -> TyConSubst
 tyConSubstExtend new subst@TyConSubst{..} = subst {
       tyConSubstMap = Map.unionWith (<>)
-                        (Map.fromList $ map (uncurry aux) new)
+                        (Map.fromList $ map aux new)
                         tyConSubstMap
     }
   where
-    aux :: TcTyVar -> (TyCon, [Type]) -> (TcTyVar, NonEmpty (TyCon, [Type]))
-    aux var s = (canonicalize tyConSubstCanon var, s :| [])
+    aux :: (TcTyVar,          (TyCon, [Type]), [Coercion])
+        -> (TcTyVar, NonEmpty (TyCon, [Type] , [Coercion]))
+    aux (var, (tc, args), deps) =
+      let (var', deps') = canonicalize tyConSubstCanon var
+      in  (var', (tc, args, deps ++ deps') :| [])
 
 {-------------------------------------------------------------------------------
   Classification
@@ -181,13 +190,13 @@ data Classified = Classified {
       -- an application of a concrete type constructor (note that we only ever
       -- apply the substitution to the head @t@ of a type @t args@, never to the
       -- arguments).
-      classifiedProductive :: [(TcTyVar, (TyCon, [Type]))]
+      classifiedProductive :: [(TcTyVar, (TyCon, [Type]), [Coercion])]
 
       -- | Extend equivalence class of variables
       --
       -- An equality @var1 := var2@ we will regard as extending the equivalence
       -- classes of variables (see 'constructEquivClasses').
-    , classifiedExtendEquivClass :: [(TcTyVar, TcTyVar)]
+    , classifiedExtendEquivClass :: [(TcTyVar, TcTyVar, [Coercion])]
 
       -- | Substitutions we need to reconsider later
       --
@@ -195,7 +204,7 @@ data Classified = Classified {
       -- arguments) is most problematic. Applying it /may/ allow us to make
       -- progress, but it may not (consider for example @var := var arg@). We
       -- will reconsider such equalities at the end (see 'process').
-    , classifiedReconsider :: [(TcTyVar, (TcTyVar, NonEmpty Type))]
+    , classifiedReconsider :: [(TcTyVar, (TcTyVar, NonEmpty Type), [Coercion])]
     }
 
 instance Semigroup Classified where
@@ -211,19 +220,19 @@ instance Semigroup Classified where
 instance Monoid Classified where
   mempty = Classified [] [] []
 
-productive :: TcTyVar -> (TyCon, [Type]) -> Classified
-productive var (tyCon, args) = mempty {
-      classifiedProductive = [(var, (tyCon, args))]
+productive :: TcTyVar -> (TyCon, [Type]) -> [Coercion] -> Classified
+productive var app deps = mempty {
+      classifiedProductive = [(var, app, deps)]
     }
 
-extendEquivClass :: TcTyVar -> TcTyVar -> Classified
-extendEquivClass var var' = mempty {
-      classifiedExtendEquivClass = [(var, var')]
+extendEquivClass :: TcTyVar -> TcTyVar -> [Coercion] -> Classified
+extendEquivClass var var' deps = mempty {
+      classifiedExtendEquivClass = [(var, var', deps)]
     }
 
-reconsider :: TcTyVar -> (TcTyVar, NonEmpty Type) -> Classified
-reconsider var (var', args) = mempty {
-      classifiedReconsider = [(var, (var', args))]
+reconsider :: TcTyVar -> (TcTyVar, NonEmpty Type) -> [Coercion] -> Classified
+reconsider var (var', args) deps = mempty {
+      classifiedReconsider = [(var, (var', args), deps)]
     }
 
 -- | Classify a set of Given constraints.
@@ -235,14 +244,15 @@ classify = go mempty
     go :: Classified -> [Ct] -> Classified
     go acc []     = acc
     go acc (c:cs) =
+      let deps = [ctEvCoercion (ctEvidence c)] in
         case isCanonicalVarEq c of
           Just (var, splitAppTys -> (fn, args), NomEq)
             | Just (tyCon, inner) <- splitTyConApp_maybe fn ->
-                go (productive var (tyCon, inner ++ args) <> acc) cs
+                go (productive var (tyCon, inner ++ args) deps <> acc) cs
             | Just var' <- getTyVar_maybe fn, null args ->
-                go (extendEquivClass var var' <> acc) cs
+                go (extendEquivClass var var' deps <> acc) cs
             | Just var' <- getTyVar_maybe fn, x:xs <- args ->
-                go (reconsider var (var', x :| xs) <> acc) cs
+                go (reconsider var (var', x :| xs) deps <> acc) cs
           _otherwise ->
             go acc cs
 
@@ -302,7 +312,7 @@ process Classified{..} =
         $ tyConSubstEmpty (constructEquivClasses classifiedExtendEquivClass)
 
     go :: TyConSubst
-       -> [(TcTyVar, (TcTyVar, NonEmpty Type))]
+       -> [(TcTyVar, (TcTyVar, NonEmpty Type), [Coercion])]
        -> TyConSubst
     go acc rs =
         let (prod, rest) = tryApply makeProductive rs in
@@ -311,13 +321,15 @@ process Classified{..} =
           else go (tyConSubstExtend prod acc) rest
       where
         makeProductive ::
-             (TcTyVar, (TcTyVar, NonEmpty Type))
-          -> Maybe (NonEmpty (TcTyVar, (TyCon, [Type])))
-        makeProductive (var, (var', args)) =
-            fmap (fmap (uncurry aux)) (tyConSubstLookup var' acc)
+             (TcTyVar, (TcTyVar, NonEmpty Type), [Coercion])
+          -> Maybe (NonEmpty (TcTyVar, (TyCon, [Type]), [Coercion]))
+        makeProductive (var, (var', args), deps) = do
+          tcApp <- tyConSubstLookup var' acc
+          return $ fmap aux tcApp
           where
-            aux :: TyCon -> [Type] -> (TcTyVar, (TyCon, [Type]))
-            aux tyCon args' = (var, (tyCon, (args' ++ toList args)))
+            aux :: (TyCon, [Type], [Coercion]) -> (TcTyVar, (TyCon, [Type]), [Coercion])
+            aux (tyCon, args', deps') =
+              (var, (tyCon, args' ++ toList args), deps ++ deps')
 
 -- | Construct a 'TyConSubst' from a collection of Given constraints.
 mkTyConSubst :: [Ct] -> TyConSubst
@@ -329,16 +341,21 @@ mkTyConSubst = process . classify
 
 -- | Like 'splitTyConApp_maybe', but taking Given constraints into account.
 --
+-- Alongside the @TyCon@ and its arguments, also returns a list of coercions
+-- that embody the Givens that we depended on.
+--
 -- Looks through type synonyms, just like 'splitTyConApp_maybe' does.
-splitTyConApp_upTo :: TyConSubst -> Type -> Maybe (NonEmpty (TyCon, [Type]))
+splitTyConApp_upTo :: TyConSubst -> Type -> Maybe (NonEmpty (TyCon, [Type], [Coercion]))
 splitTyConApp_upTo subst typ = asum [
       -- Direct match
       do (tyCon, inner) <- splitTyConApp_maybe fn
-         return ((tyCon, inner ++ args) :| [])
+         return ((tyCon, inner ++ args, []) :| [])
 
       -- Indirect match
     , do var <- getTyVar_maybe fn
-         fmap (fmap (second (++ args))) $ tyConSubstLookup var subst
+         tcApps <- tyConSubstLookup var subst
+         return $
+           fmap (\ (tc, inner, deps) -> (tc, inner ++ args, deps)) tcApps
     ]
   where
     (fn, args) = splitAppTys typ
@@ -407,41 +424,65 @@ tryApply f = first (concat . map toList) . partitionEithers . map f'
   Equivalence classes
 -------------------------------------------------------------------------------}
 
--- | Given a set of equivalent pairs, map every value to canonical value
+-- | Given a set of labelled equivalent pairs, map every value to a canonical
+-- value, with the shortest path (as a list of labels) connecting the value to
+-- the canonical value.
 --
 -- Example with two classes:
 --
--- >>> constructEquivClasses [(1, 2), (4, 5), (2, 3)]
--- fromList [(1,1),(2,1),(3,1),(4,4),(5,4)]
+-- >>> constructEquivClasses [(1, 2, "12"), (4, 5, "45"), (2, 3, "23")]
+-- fromList [(1,1,[]),(2,1,["12"]),(3,1, ["12","23"]),(4,4,[]),(5,4, ["45"])]
 --
 -- Adding one element that connects both classes:
 --
--- >>> constructEquivClasses [(1, 2), (4, 5), (2, 3), (3, 4)]
--- fromList [(1,1),(2,1),(3,1),(4,1),(5,1)]
-constructEquivClasses :: forall a. Ord a => [(a, a)] -> Map a a
-constructEquivClasses equivs =
-     Map.unions $ map (pickCanonical . map fromVertex . toList) $
-       Graph.components graph
+-- >>> constructEquivClasses [(1, 2, "12"), (4, 5, "45"), (2, 3, "23"), (3,4,"34")]
+-- fromList [(1,1,[]),(2,1,["12"]),(3,1,["12", "23"]),(4,1,["12","23","34"]),(5,4, ["12","23","34,"45"])]
+constructEquivClasses :: forall a l. (Ord a, Monoid l) => [(a, a, l)] -> Map a (a, l)
+constructEquivClasses equivs
+  = Map.unions
+  $ map (pickCanonical . map fromVertex . toList)
+  $ Graph.components graph
   where
     allValues :: Set a
-    allValues = Set.fromList $ concatMap (\(x, y) -> [x, y]) equivs
+    allValues = Set.fromList $ concatMap (\(x, y, _) -> [x,y]) equivs
+
+    edges :: Map (Set a) l
+    edges = Map.fromList [ (Set.fromList [x, y], lbl) | (x,y,lbl) <- equivs ]
 
     toVertex   :: a -> Vertex
     fromVertex :: Vertex -> a
 
     toVertex   a = Map.findWithDefault (error "toVertex: impossible")   a $
-                     Map.fromList $ zip (Set.toList allValues) [1..]
+                     Map.fromList $ zip (Set.elems allValues) [1..]
     fromVertex v = Map.findWithDefault (error "fromVertex: impossible") v $
-                     Map.fromList $ zip [1..] (Set.toList allValues)
+                     Map.fromList $ zip [1..] (Set.elems allValues)
 
     graph :: Graph
-    graph = Graph.buildG (1, Set.size allValues) $
-              map (bimap toVertex toVertex) equivs
+    graph = Graph.buildG (1, Set.size allValues)
+               [ (toVertex x, toVertex y) | (x, y, _) <- equivs]
 
-    -- Given a previously established equivalence class, construct a mapping
-    -- that maps each value to an (arbitrary) canonical value.
-    pickCanonical :: [a] -> Map a a
-    pickCanonical cls = Map.fromList $ zip cls (repeat (minimum cls))
+    neighbours :: a -> [(a, l)]
+    neighbours v =
+      [ ( u, edges Map.! ( Set.fromList [ v, u ] ) )
+      | u <- map fromVertex $ graph Array.! ( toVertex v )
+      ]
 
-canonicalize :: Ord a => Map a a -> a -> a
-canonicalize canon x = Map.findWithDefault x x canon
+    pickCanonical :: [a] -> Map a (a, l)
+    pickCanonical comp = ( root, ) <$> go ( Map.singleton root mempty ) [ root ]
+      where
+        root = minimum comp
+
+        go :: Map a l -> [a] -> Map a l
+        go ds [] = ds
+        go ds (v:vs) =
+          let
+            -- unvisited neighbours
+            us = filter ( \ (u, _) -> not (u `Map.member` ds) ) $ neighbours v
+
+            d = ds Map.! v
+            ds' = Map.union ds (Map.fromList [ (u, l <> d) | (u, l) <- us ])
+          in
+            go ds' (vs ++ map fst us)
+
+canonicalize :: (Ord a, Monoid l) => Map a (a, l) -> a -> (a, l)
+canonicalize canon x = Map.findWithDefault (x, mempty) x canon
