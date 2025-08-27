@@ -1,10 +1,12 @@
 {-# LANGUAGE CPP #-}
 
+{-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE LambdaCase          #-}
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE TupleSections       #-}
+{-# LANGUAGE TypeApplications    #-}
 {-# LANGUAGE ViewPatterns        #-}
 
 {-|
@@ -41,29 +43,37 @@ module GHC.TcPlugin.API.TyConSubst (
 
 -- base
 import Data.Bifunctor
+  ( Bifunctor(first, second) )
 import Data.Either
   ( partitionEithers )
 import Data.Foldable
   ( toList, asum )
 import Data.List.NonEmpty
   ( NonEmpty(..) )
-
--- array
-import qualified Data.Array as Array
-  ( (!) )
+import Data.Maybe
+  ( fromJust )
+#if !MIN_VERSION_ghc(8,11,0)
+import Unsafe.Coerce
+  ( unsafeCoerce )
+#endif
 
 -- containers
-import Data.Graph
-  ( Graph, Vertex )
-import qualified Data.Graph as Graph
-import Data.Map
-  ( Map )
-import qualified Data.Map as Map
-import Data.Set
-  ( Set )
-import qualified Data.Set as Set
+import Data.Sequence
+  ( Seq )
+import qualified Data.Sequence as Seq
 
 -- ghc
+#if MIN_VERSION_ghc(9,5,0)
+import qualified GHC.Data.Word64Map.Strict as Word64Map
+#else
+import qualified Data.IntMap.Strict as IntMap
+#endif
+import GHC.Types.Unique
+  ( Uniquable, getUnique )
+import qualified GHC.Types.Unique.FM as UFM
+import GHC.Types.Unique.Set
+  ( UniqSet )
+import qualified GHC.Types.Unique.Set as UniqSet
 import GHC.Utils.Outputable
   hiding ( (<>) )
 
@@ -80,8 +90,8 @@ import GHC.Tc.Types.Constraint
 
 -- | Substitution for recognizing 'TyCon' applications modulo nominal equalities.
 data TyConSubst = TyConSubst {
-      tyConSubstMap :: Map TcTyVar (NonEmpty (TyCon, [Type], [Coercion]))
-    , tyConSubstCanon :: Map TcTyVar (TcTyVar, [Coercion])
+      tyConSubstMap :: UniqFM TcTyVar (NonEmpty (TyCon, [Type], [Coercion]))
+    , tyConSubstCanon :: UniqFM TcTyVar (TcTyVar, [Coercion])
     }
 -- During constraint solving the set of Given constraints includes so-called
 -- "canonical equalities": equalities of the form
@@ -143,16 +153,16 @@ data TyConSubst = TyConSubst {
 --
 -- The canonical variables map is established once when the initial substitution
 -- is generated and not updated thereafter.
-tyConSubstEmpty :: Map TcTyVar (TcTyVar, [Coercion]) -> TyConSubst
+tyConSubstEmpty :: UniqFM TcTyVar (TcTyVar, [Coercion]) -> TyConSubst
 tyConSubstEmpty canon = TyConSubst {
-      tyConSubstMap   = Map.empty
+      tyConSubstMap   = UFM.emptyUFM
     , tyConSubstCanon = canon
     }
 
 -- | Lookup a variable in the substitution
 tyConSubstLookup :: TcTyVar -> TyConSubst -> Maybe (NonEmpty (TyCon, [Type], [Coercion]))
 tyConSubstLookup var TyConSubst{..} =
-  fmap ( \ (tc, tys, deps) -> (tc, tys, deps ++ deps')) <$> Map.lookup var' tyConSubstMap
+  fmap ( \ (tc, tys, deps) -> (tc, tys, deps ++ deps')) <$> UFM.lookupUFM tyConSubstMap var'
   where
     var' :: TcTyVar
     deps' :: [Coercion]
@@ -163,8 +173,8 @@ tyConSubstExtend ::
      [(TcTyVar, (TyCon, [Type]), [Coercion])]
   -> TyConSubst -> TyConSubst
 tyConSubstExtend new subst@TyConSubst{..} = subst {
-      tyConSubstMap = Map.unionWith (<>)
-                        (Map.fromList $ map aux new)
+      tyConSubstMap = UFM.plusUFM_C (<>)
+                        (UFM.listToUFM $ map aux new)
                         tyConSubstMap
     }
   where
@@ -425,64 +435,84 @@ tryApply f = first (concat . map toList) . partitionEithers . map f'
 -------------------------------------------------------------------------------}
 
 -- | Given a set of labelled equivalent pairs, map every value to a canonical
--- value, with the shortest path (as a list of labels) connecting the value to
--- the canonical value.
+-- value in the same equivalence class, with the shortest path (as a list of
+-- labels) connecting the value to the canonical value.
 --
--- Example with two classes:
+-- Example with two equivalence classes:
 --
--- >>> constructEquivClasses [(1, 2, "12"), (4, 5, "45"), (2, 3, "23")]
--- fromList [(1,1,[]),(2,1,["12"]),(3,1, ["12","23"]),(4,4,[]),(5,4, ["45"])]
+-- >>> constructEquivClasses [(1, 2, ["12"]), (4, 5, ["45"]), (2, 3, ["23"])]
+-- fromList [(1,(1,[])),(2,(1,["12"])),(3,(1,["23","12"])),(4,(4,[])),(5,(4,["45"]))]
 --
--- Adding one element that connects both classes:
+-- Adding one element that connects both equivalence classes:
 --
--- >>> constructEquivClasses [(1, 2, "12"), (4, 5, "45"), (2, 3, "23"), (3,4,"34")]
--- fromList [(1,1,[]),(2,1,["12"]),(3,1,["12", "23"]),(4,1,["12","23","34"]),(5,4, ["12","23","34,"45"])]
-constructEquivClasses :: forall a l. (Ord a, Monoid l) => [(a, a, l)] -> Map a (a, l)
-constructEquivClasses equivs
-  = Map.unions
-  $ map (pickCanonical . map fromVertex . toList)
-  $ Graph.components graph
+-- >>> constructEquivClasses [(1, 2, ["12"]), (4, 5, ["45"]), (2, 3, ["23"]), (3, 4, ["34"])]
+-- fromList [(1,(1,[])),(2,(1,["12"])),(3,(1,["23","12"])),(4,(1,["34","23","12"])),(5,(1,["45","34","23","12"]))]
+constructEquivClasses :: forall a l. (Uniquable a, Monoid l) => [(a, a, l)] -> UniqFM a (a, l)
+constructEquivClasses equivs = canonicals
   where
-    allValues :: Set a
-    allValues = Set.fromList $ concatMap (\(x, y, _) -> [x,y]) equivs
+    neighbours :: UniqFM a (UniqFM a l)
+    neighbours = neighboursMap equivs
 
-    edges :: Map (Set a) l
-    edges = Map.fromList [ (Set.fromList [x, y], lbl) | (x,y,lbl) <- equivs ]
+    allValues :: UniqSet a
+    allValues = UniqSet.mkUniqSet $ concat [ [x,y] | (x,y,_) <- equivs ]
 
-    toVertex   :: a -> Vertex
-    fromVertex :: Vertex -> a
-
-    toVertex   a = Map.findWithDefault (error "toVertex: impossible")   a $
-                     Map.fromList $ zip (Set.elems allValues) [1..]
-    fromVertex v = Map.findWithDefault (error "fromVertex: impossible") v $
-                     Map.fromList $ zip [1..] (Set.elems allValues)
-
-    graph :: Graph
-    graph = Graph.buildG (1, Set.size allValues)
-               [ (toVertex x, toVertex y) | (x, y, _) <- equivs]
-
-    neighbours :: a -> [(a, l)]
-    neighbours v =
-      [ ( u, edges Map.! ( Set.fromList [ v, u ] ) )
-      | u <- map fromVertex $ graph Array.! ( toVertex v )
-      ]
-
-    pickCanonical :: [a] -> Map a (a, l)
-    pickCanonical comp = ( root, ) <$> go ( Map.singleton root mempty ) [ root ]
+    canonicals :: UniqFM a (a, l)
+    canonicals = go UFM.emptyUFM allValues
       where
-        root = minimum comp
+        go :: UniqFM a (a, l) -> UniqSet a -> UniqFM a (a, l)
+        go acc vs =
+          case minViewUniqSet vs of
+            Nothing -> acc
+            Just (v, vs') ->
+              let
+                !comp = doComp
+                          ( UFM.unitUFM v mempty )
+                          ( Seq.singleton $ getUnique v )
+              in
+                go
+                  ( UFM.plusUFM acc ( ( v , ) <$> comp ) )
+                  ( vs' `UniqSet.uniqSetMinusUFM` comp )
 
-        go :: Map a l -> [a] -> Map a l
-        go ds [] = ds
-        go ds (v:vs) =
+        doComp :: UniqFM a l -> Seq Unique -> UniqFM a l
+        doComp !ds Seq.Empty = ds
+        doComp  ds (v Seq.:<| vs) =
           let
             -- unvisited neighbours
-            us = filter ( \ (u, _) -> not (u `Map.member` ds) ) $ neighbours v
+            !us = ( fromJust $ UFM.lookupUFM_Directly neighbours v ) `UFM.minusUFM` ds
+            !d = fromJust $ UFM.lookupUFM_Directly ds v
 
-            d = ds Map.! v
-            ds' = Map.union ds (Map.fromList [ (u, l <> d) | (u, l) <- us ])
+            !ds' = UFM.plusUFM ds ( UFM.mapUFM (<> d) us )
+            !vs' = vs Seq.>< Seq.fromList ( UFM.nonDetKeysUFM us )
           in
-            go ds' (vs ++ map fst us)
+            doComp ds' vs'
 
-canonicalize :: (Ord a, Monoid l) => Map a (a, l) -> a -> (a, l)
-canonicalize canon x = Map.findWithDefault (x, mempty) x canon
+minViewUniqSet :: forall a. UniqSet a -> Maybe (a, UniqSet a)
+minViewUniqSet s =
+  let m = UFM.ufmToIntMap $ UniqSet.getUniqSet s
+  in second
+        ( UniqSet.unsafeUFMToUniqSet
+            .
+#if MIN_VERSION_ghc(8,11,0)
+          UFM.unsafeIntMapToUFM
+#else
+          ( unsafeCoerce :: IntMap.IntMap a -> UniqFM a a )
+#endif
+        ) <$>
+#if MIN_VERSION_ghc(9,5,0)
+      Word64Map.minView
+#else
+      IntMap.minView
+#endif
+        m
+
+neighboursMap :: forall a l. Uniquable a => [(a, a, l)] -> UniqFM a (UniqFM a l)
+neighboursMap edges = foldr addEdge UFM.emptyUFM edges
+  where
+    addEdge :: (a, a, l) -> UniqFM a (UniqFM a l) -> UniqFM a (UniqFM a l)
+    addEdge (u, v, l) m
+      = UFM.addToUFM_C UFM.plusUFM
+          (UFM.addToUFM_C UFM.plusUFM m v (UFM.unitUFM u l))
+          u (UFM.unitUFM v l)
+
+canonicalize :: (Uniquable a, Monoid l) => UniqFM a (a, l) -> a -> (a, l)
+canonicalize canon x = UFM.lookupWithDefaultUFM canon (x, mempty) x
