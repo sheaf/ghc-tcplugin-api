@@ -111,7 +111,7 @@ data TyConSubst = TyConSubst {
 --   derive any additional equalities from them (i.e. if, say, we know that
 --   @x ~ T1@ and @x ~ T2@, we will not attempt to use the fact that this means
 --   that @T1 ~ T2@, nor any derived conclusions thereof). We /will/ however
---   try to apply the canononical equalities as often as is necessary (e.g.,
+--   try to apply the canonical equalities as often as is necessary (e.g.,
 --   first applying @x ~ T y@, then applying @y ~ T2@).
 --
 -- We solve this problem by constructing a 'TyConSubst': a possibly
@@ -289,7 +289,7 @@ classify = go mempty
 -- o We keep doing this until we can make no more progress.
 --
 -- The functions for working with 'TyConSubst' take the variable equivalence
--- classes into acocunt, so we do not need to do that here.
+-- classes into account, so we do not need to do that here.
 --
 -- Two observations:
 --
