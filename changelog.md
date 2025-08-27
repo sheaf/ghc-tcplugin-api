@@ -1,3 +1,9 @@
+
+# Version 0.17.1.0 (2025-08-27)
+
+- Fix a regression, introduced in `0.17.0.0`, in which `splitTyConApp_upTo` would
+  fail to take into account equalities of the form `tv1 ~ tv2`.
+
 # Version 0.17.0.0 (2025-08-25)
 
 - `splitTyConApp_upTo` now additionally returns a `[Coercion]` for tracking
