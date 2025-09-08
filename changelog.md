@@ -1,4 +1,9 @@
 
+# Version 0.17.2.0 (2025-09-08)
+
+- Fix the package failing to build on GHC 9.6.1 through 9.6.6 and
+  on GHC 9.8.1 through 9.8.3. GHC versions 9.6.7 and 9.8.4 are unaffected.
+
 # Version 0.17.1.0 (2025-08-27)
 
 - Fix a regression, introduced in `0.17.0.0`, in which `splitTyConApp_upTo` would

@@ -41,6 +41,18 @@ module GHC.TcPlugin.API.TyConSubst (
   , splitTyConApp_upTo
   ) where
 
+-- Word64Map is available:
+--
+--  - from 9.10.1 onwards
+--  - in 9.8.4
+--  - in 9.6.7
+--
+-- This is unusual: whether a module is exposed depends on the MINOR version
+#define HAS_WORD64MAP \
+    (MIN_VERSION_ghc(9,9,0) || \
+    (MIN_VERSION_ghc(9,8,4) && !(MIN_VERSION_ghc(9,9,0))) || \
+    (MIN_VERSION_ghc(9,6,7) && !(MIN_VERSION_ghc(9,7,0))))
+
 -- base
 import Data.Bifunctor
   ( Bifunctor(first, second) )
@@ -63,7 +75,7 @@ import Data.Sequence
 import qualified Data.Sequence as Seq
 
 -- ghc
-#if MIN_VERSION_ghc(9,5,0)
+#if HAS_WORD64MAP
 import qualified GHC.Data.Word64Map.Strict as Word64Map
 #else
 import qualified Data.IntMap.Strict as IntMap
@@ -498,7 +510,7 @@ minViewUniqSet s =
           ( unsafeCoerce :: IntMap.IntMap a -> UniqFM a a )
 #endif
         ) <$>
-#if MIN_VERSION_ghc(9,5,0)
+#if HAS_WORD64MAP
       Word64Map.minView
 #else
       IntMap.minView
