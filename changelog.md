@@ -1,4 +1,13 @@
 
+# Version 0.18.0.0 (2025-09-15)
+
+- On GHC 9.0 and below, `ghc-tcplugin-api` will now automatically unflatten all
+  Given constraints. That is, all flattening skolems `[G] fsk ~ F tys` will be
+  substitute away, both in Givens and in Wanteds/Deriveds.
+
+  No change for GHC 9.2 and above, as GHC stopped producing flattening variables
+  from 9.2 onwards.
+
 # Version 0.17.2.0 (2025-09-08)
 
 - Fix the package failing to build on GHC 9.6.1 through 9.6.6 and
