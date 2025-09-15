@@ -21,6 +21,9 @@ module GHC.TcPlugin.API.Internal.Shim
   , TcPluginSolveResult(TcPluginContradiction, TcPluginOk, ..), TcPluginRewriteResult(..)
   , RewriteEnv(..)
   , shimRewriter
+#if !MIN_VERSION_ghc(9,1,0)
+  , unflattenCts
+#endif
   )
   where
 
@@ -31,11 +34,11 @@ import Control.Monad
   ( forM, unless, when )
 import Data.Foldable
   ( traverse_
-#if !MIN_VERSION_ghc(9,2,0)
+#if !MIN_VERSION_ghc(9,1,0)
   , foldlM
 #endif
   )
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
 import Data.List.NonEmpty
   ( NonEmpty((:|)) )
 #endif
@@ -55,6 +58,9 @@ import GHC.Core.Coercion
   , mkAppCos, mkNomReflCo, mkSubCo
   , mkTyConAppCo, tyConRolesX
   , tyConRolesRepresentational
+#if !MIN_VERSION_ghc(9,1,0)
+  , CoercionHole(..), setCoHoleCoVar, coHoleCoVar
+#endif
   )
 import GHC.Core.Predicate
   ( EqRel(..), eqRelRole )
@@ -64,7 +70,7 @@ import GHC.Core.TyCo.Rep
   )
 import GHC.Core.TyCon
   ( TyCon(..), TyConBinder, TyConBndrVis(..)
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
   , isForgetfulSynTyCon
 #endif
   , isFamFreeTyCon, isTypeSynonymTyCon
@@ -80,7 +86,7 @@ import GHC.Core.Type
 #endif
   , coreView, tyVarKind
   )
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
 import GHC.Data.Maybe
   ( firstJustsM )
 #endif
@@ -96,7 +102,7 @@ import GHC.Tc.Solver.Monad
   , runTcPluginTcS, runTcSWithEvBinds
   , traceTcS
   , setWantedEvTerm
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
   , lookupFamAppCache, lookupFamAppInert, extendFamAppCache
   , pattern EqualCtList
 #else
@@ -112,8 +118,10 @@ import qualified GHC.Tc.Types as GHC
 import GHC.Tc.Types.Constraint
   ( Ct(..), CtEvidence(..)
   , CtLoc, CtFlavour(..), CtFlavourRole, ShadowInfo(..)
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
   , CanEqLHS(..)
+#else
+  , QCInst(..), TcEvDest(..)
 #endif
   , ctLoc, ctFlavour, ctEvidence, ctEqRel, ctEvPred
   , ctEvExpr, ctEvCoercion, ctEvFlavour
@@ -125,10 +133,14 @@ import GHC.Tc.Types.Evidence
   )
 import GHC.Tc.Utils.TcType
   ( TcTyCoVarSet
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
   , tcSplitForAllTyVarBinders
 #else
   , tcSplitForAllVarBndrs
+
+  -- Unflattening
+  , TCvSubst(..), substTy, substTys, extendTvSubst
+  , emptyTCvSubst, lookupTyVar
 #endif
   , tcSplitTyConApp_maybe
   , tcTypeKind
@@ -138,8 +150,10 @@ import GHC.Types.Unique.FM
   ( UniqFM, lookupUFM, isNullUFM )
 import GHC.Types.Var
   ( TcTyVar, VarBndr(..)
-#if !MIN_VERSION_ghc(9,2,0)
+#if !MIN_VERSION_ghc(9,1,0)
   , TyVarBinder
+  , updateTyVarKind
+  , setVarType
 #endif
   , updateTyVarKindM
   )
@@ -152,7 +166,7 @@ import GHC.Utils.Misc
 import GHC.Utils.Monad
   ( zipWith3M )
 import GHC.Utils.Outputable
-  ( Outputable(..), SDoc, empty )
+  hiding ( (<>) )
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API.Internal.Shim.Reduction
@@ -532,7 +546,7 @@ rewrite_exact_fam_app tc tys = do
         liftTcS $
           extendFamAppCache tc tys
             ( mkSymCoOnGHC92 final_co, final_xi )
-#if !MIN_VERSION_ghc(9,2,0)
+#if !MIN_VERSION_ghc(9,1,0)
             flavour
 #endif
       return final_redn
@@ -545,7 +559,7 @@ rewrite_exact_fam_app tc tys = do
 -- (Recall: this module is only used for GHC 9.2 and below.)
 mkSymCoOnGHC92 :: Coercion -> Coercion
 mkSymCoOnGHC92 co =
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
   mkSymCo co
 #else
   co
@@ -615,7 +629,7 @@ rewrite_co co = liftTcS $ zonkCo co
 rewriterView :: Type -> Maybe Type
 rewriterView ty@(TyConApp tc _)
   | ( isTypeSynonymTyCon tc && not (isFamFreeTyCon tc) )
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
   || isForgetfulSynTyCon tc
 #endif
   = tcView ty
@@ -651,7 +665,7 @@ rewrite_tyvar2 :: TcTyVar -> CtFlavourRole -> RewriteM RewriteTvResult
 rewrite_tyvar2 tv fr@(_, eq_rel) = do
   ieqs <- liftTcS $ getInertEqs
   case lookupDVarEnv ieqs tv of
-#if MIN_VERSION_ghc(9,2,0)
+#if MIN_VERSION_ghc(9,1,0)
     Just (EqualCtList (ct :| _))
       | CEqCan { cc_ev = ctev, cc_lhs = TyVarLHS {}
                , cc_rhs = rhs_ty, cc_eq_rel = ct_eq_rel } <- ct
@@ -942,7 +956,7 @@ bumpDepth (RewriteM thing_inside) = RewriteM \ env s -> do
       !env'  = env { rewriteEnv = renv' }
   thing_inside env' s
 
-#if !MIN_VERSION_ghc(9,2,0)
+#if !MIN_VERSION_ghc(9,1,0)
 --------------------------------------------------------------------------------
 -- GHC 9.0 compatibility.
 
@@ -971,5 +985,114 @@ lookupFamAppInert tc tys = do
 
 tcSplitForAllTyVarBinders :: Type -> ([TyVarBinder], Type)
 tcSplitForAllTyVarBinders = tcSplitForAllVarBndrs
+
+#endif
+
+--------------------------------------------------------------------------------
+-- Unflattening constraints
+
+#if !MIN_VERSION_ghc(9,1,0)
+unflattenCts :: [ Ct ] -> [ Ct ] -> [ Ct ] -> ( [ Ct ], [ Ct ], [ Ct ] )
+unflattenCts givens0 deriveds0 wanteds0 =
+  -- NB: on all GHC versions we support (GHC >= 8.8),
+  -- GHC passes zonked constraints to typechecker plugins.
+  -- So there's no need for us to zonk anything.
+  let ( subst, givens ) = add_fsks emptyTCvSubst [] givens0
+      deriveds = substCts subst deriveds0
+      wanteds  = substCts subst wanteds0
+
+  in
+    ( givens, deriveds, wanteds )
+
+-- Construct an unflattening substitution from Givens of the form
+--
+--  [G] fsk ~ rhs
+--
+-- and filter them out.
+add_fsks :: TCvSubst -> [ Ct ] -> [ Ct ] -> ( TCvSubst, [ Ct ] )
+add_fsks subst rev_acc [] = ( subst, substCts subst $ reverse rev_acc )
+add_fsks subst rev_acc ( ct : cts ) =
+  case ct of
+    CFunEqCan { cc_fsk, cc_fun, cc_tyargs } ->
+      let subst' = extendSubst subst cc_fsk $ mkTyConApp cc_fun cc_tyargs
+      in add_fsks subst' rev_acc cts
+    _ -> add_fsks subst ( ct : rev_acc ) cts
+
+extendSubst :: TCvSubst -> TyVar -> Type -> TCvSubst
+extendSubst subst@( TCvSubst in_scope tv_env cv_env ) tv ty =
+  -- Keep the substitution idempotent
+  let ty' = substTy subst ty
+      tv_subst = extendTvSubst emptyTCvSubst tv ty'
+      subst' = TCvSubst in_scope ( fmap ( substTy tv_subst ) tv_env ) cv_env
+  in extendTvSubst subst' tv ty'
+
+substCts :: TCvSubst -> [ Ct ] -> [ Ct ]
+substCts subst = map $ substCt subst
+
+substCt :: TCvSubst -> Ct -> Ct
+substCt subst ct =
+  case ct of
+    CIrredCan { cc_ev } ->
+      ct { cc_ev = substCtEv subst cc_ev }
+    CNonCanonical { cc_ev } ->
+      ct { cc_ev = substCtEv subst cc_ev }
+    CDictCan { cc_ev, cc_tyargs } ->
+      ct { cc_ev     = substCtEv subst cc_ev
+         , cc_tyargs = substTys subst cc_tyargs
+         }
+    CFunEqCan {} ->
+      pprPanic "substCt: CFunEqCan" (ppr ct)
+    CTyEqCan { cc_ev, cc_tyvar, cc_rhs } ->
+      let ev'  = substCtEv subst cc_ev
+          rhs' = substTy   subst cc_rhs
+      in
+      case lookupTyVar subst cc_tyvar of
+        Nothing ->
+          ct { cc_ev    = ev'
+             , cc_tyvar = updateTyVarKind ( substTy subst ) cc_tyvar
+             , cc_rhs   = rhs'
+             }
+        Just ty' ->
+          case ty' of
+            TyVarTy tv' ->
+              ct { cc_ev    = ev'
+                 , cc_tyvar = tv'
+                 , cc_rhs   = rhs'
+                 }
+            _ ->
+              CNonCanonical { cc_ev = ev' }
+    CQuantCan qci@( QCI { qci_ev, qci_tvs, qci_pred } ) ->
+      CQuantCan $
+        qci { qci_ev   = substCtEv subst qci_ev
+            , qci_tvs  = map ( updateTyVarKind $ substTy subst ) qci_tvs
+            , qci_pred = substTy   subst qci_pred
+            }
+#if !MIN_VERSION_ghc(8,11,0)
+    CHoleCan { cc_ev } ->
+      let ev' = substCtEv subst cc_ev
+      in ct { cc_ev = ev' }
+#endif
+
+substCtEv :: TCvSubst -> CtEvidence -> CtEvidence
+substCtEv subst ctev =
+  setCtEvPredType ctev ( substTy subst ( ctev_pred ctev ) )
+
+setCtEvPredType :: CtEvidence -> Type -> CtEvidence
+setCtEvPredType old_ev@(CtGiven { ctev_evar = ev }) new_pred
+  = old_ev { ctev_pred = new_pred
+           , ctev_evar = setVarType ev new_pred }
+
+setCtEvPredType old_ev@(CtWanted { ctev_dest = dest }) new_pred
+  = old_ev { ctev_pred = new_pred
+           , ctev_dest = new_dest }
+  where
+    new_dest = case dest of
+      EvVarDest ev -> EvVarDest (setVarType ev new_pred)
+      HoleDest h   -> HoleDest  (setCoHoleType h new_pred)
+setCtEvPredType old_ev@( CtDerived {} ) new_pred
+  = old_ev { ctev_pred = new_pred }
+
+setCoHoleType :: CoercionHole -> Type -> CoercionHole
+setCoHoleType h t = setCoHoleCoVar h (setVarType (coHoleCoVar h) t)
 
 #endif
