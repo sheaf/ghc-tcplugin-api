@@ -108,6 +108,9 @@ import qualified GHC.Tc.Types
   as GHC
     ( TcM, TcPlugin(..), TcPluginM
     , TcPluginSolver
+#if !MIN_VERSION_ghc(9,1,0)
+    , TcPluginResult(..)
+#endif
 #ifdef HAS_REWRITING
     , TcPluginRewriter
 #else
@@ -137,6 +140,13 @@ import GHC.Types.TyThing
 #else
 import GHC.Driver.Types
   ( MonadThings(..) )
+import GHC.Tc.Types.Constraint
+  ( ctEvidence, ctEvId, isDerived )
+import GHC.Types.Var.Env
+  ( lookupVarEnv, mkVarEnv )
+import GHC.Utils.Outputable
+import GHC.Tc.Plugin
+  ( tcPluginTrace )
 #endif
 
 -- ghc-tcplugin-api
@@ -145,6 +155,9 @@ import GHC.TcPlugin.API.Internal.Shim
   ( TcPluginSolveResult, TcPluginRewriteResult(..)
   , RewriteEnv
   , shimRewriter
+#if !MIN_VERSION_ghc(9,1,0)
+  , unflattenCts
+#endif
   )
 #endif
 
@@ -446,21 +459,63 @@ mkTcPlugin ( TcPlugin
       -> TcPluginDefs userDefs
       -> GHC.TcPluginSolver
     adaptUserSolveAndRewrite userSolve userRewrite ( TcPluginDefs { tcPluginUserDefs, tcPluginBuiltinDefs } )
-      = \ givens deriveds wanteds -> do
+      = \ givens0 deriveds0 wanteds0 -> do
+#if MIN_VERSION_ghc(9,1,0)
+        let givens   = givens0
+            deriveds = deriveds0
+            wanteds  = wanteds0
+#else
+        let ( givens, deriveds, wanteds ) = unflattenCts givens0 deriveds0 wanteds0
+        tcPluginTrace "ghc-tcplugin-api: unflattening" $
+          vcat [ text "givens:" <+> ppr givens0
+               , text "deriveds:" <+> ppr deriveds0
+               , text "wanteds:" <+> ppr wanteds0
+               , text (replicate 80 '=')
+               , text "givens:" <+> ppr givens
+               , text "deriveds:" <+> ppr deriveds
+               , text "wanteds:" <+> ppr wanteds
+               ]
+#endif
         evBindsVar <- GHC.getEvBindsTcPluginM
-        shimRewriter
-          givens deriveds wanteds
-          ( fmap
-              ( \ userRewriter rewriteEnv gs tys ->
-                tcPluginRewriteM ( userRewriter gs tys )
-                  tcPluginBuiltinDefs rewriteEnv
-              )
-              ( userRewrite tcPluginUserDefs )
-          )
-          ( \ gs ds ws ->
-            tcPluginSolveM ( userSolve tcPluginUserDefs gs ws )
-              tcPluginBuiltinDefs evBindsVar ds
-          )
+        res <-
+          shimRewriter
+            givens deriveds wanteds
+            ( fmap
+                ( \ userRewriter rewriteEnv gs tys ->
+                  tcPluginRewriteM ( userRewriter gs tys )
+                    tcPluginBuiltinDefs rewriteEnv
+                )
+                ( userRewrite tcPluginUserDefs )
+            )
+            ( \ gs ds ws ->
+              tcPluginSolveM ( userSolve tcPluginUserDefs gs ws )
+                tcPluginBuiltinDefs evBindsVar ds
+            )
+#if MIN_VERSION_ghc(9,1,0)
+        return res
+#else
+        let origCts =
+              mkVarEnv
+                [ ( ctEvId ct, ct )
+                | ct <- givens0 ++ wanteds0 ]
+        case res of
+          GHC.TcPluginOk solved new -> do
+            -- If we are solving a constraint that has been flattened, make
+            -- sure to solve the original constraint instead of the flattened
+            -- constraint, otherwise GHC gets very confused.
+            let
+              lookupOrigCt ct
+                | isDerived (ctEvidence ct)
+                = ct
+                | Just ct' <- lookupVarEnv origCts ( ctEvId ct )
+                = ct'
+                | otherwise
+                = ct
+              solved' = map ( \ ( ev, ct ) -> ( ev, lookupOrigCt ct ) ) solved
+            return $ GHC.TcPluginOk solved' new
+          GHC.TcPluginContradiction {} ->
+            return res
+#endif
 #endif
 
     adaptUserStop :: ( userDefs -> TcPluginM Stop () ) -> TcPluginDefs userDefs -> GHC.TcPluginM ()
