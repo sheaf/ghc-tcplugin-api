@@ -2,6 +2,7 @@
 
 {-# LANGUAGE BangPatterns        #-}
 {-# LANGUAGE LambdaCase          #-}
+{-# LANGUAGE MultiWayIf          #-}
 {-# LANGUAGE NamedFieldPuns      #-}
 {-# LANGUAGE RecordWildCards     #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -403,7 +404,6 @@ isCanonicalVarEq = \case
       Just (cc_tyvar, cc_rhs, cc_eq_rel)
     CFunEqCan { cc_fsk, cc_fun, cc_tyargs } ->
       Just (cc_fsk, mkTyConApp cc_fun cc_tyargs, NomEq)
-    _otherwise    -> Nothing
 #elif __GLASGOW_HASKELL__ < 907
     CEqCan { cc_lhs, cc_rhs, cc_eq_rel }
       | TyVarLHS var <- cc_lhs
@@ -411,8 +411,6 @@ isCanonicalVarEq = \case
       | TyFamLHS tyCon args <- cc_lhs
       , Just var            <- getTyVar_maybe cc_rhs
       -> Just (var, mkTyConApp tyCon args, NomEq)
-    _otherwise
-      -> Nothing
 #else
     CEqCan eqCt
       | TyVarLHS var <- lhs
@@ -424,9 +422,18 @@ isCanonicalVarEq = \case
         lhs = eq_lhs eqCt
         rhs = eq_rhs eqCt
         rel = eq_eq_rel eqCt
-    _otherwise
-      -> Nothing
 #endif
+    -- Deal with CNonCanonical, which are produced by ghc-tcplugin-api
+    -- in GHC 9.0 and below due to 'unflattenCts'.
+    ct@(CNonCanonical {})
+      | EqPred rel lhs rhs <- classifyPredType (ctPred ct)
+      -> if | Just tv <- getTyVar_maybe lhs
+            -> Just (tv, rhs, rel)
+            | Just tv <- getTyVar_maybe rhs
+            -> Just (tv, lhs, rel)
+            | otherwise
+            -> Nothing
+    _ -> Nothing
 
 {-------------------------------------------------------------------------------
   Internal auxiliary
