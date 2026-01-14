@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.18.1.0
+version:        0.18.2.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
@@ -153,6 +153,7 @@ library
         , Module     as GHC.Unit.Module.Name
         , Module     as GHC.Unit.Types
 
+        , FV         as GHC.Utils.FV
         , Util       as GHC.Utils.Misc
         , TcRnMonad  as GHC.Utils.Monad
         , Outputable as GHC.Utils.Outputable
@@ -167,6 +168,7 @@ library
           , Constraint as GHC.Tc.Types.Constraint
           , TcOrigin   as GHC.Tc.Types.Origin
           , GHC.ThToHs as GHC.ThToHs
+             -- I forget what this last line does, but it is needed on GHC 9.10
           )
 
     else

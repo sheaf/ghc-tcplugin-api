@@ -450,6 +450,12 @@ module GHC.TcPlugin.API
   , pattern OneTy, pattern ManyTy
 #endif
 
+    -- ** Substitution
+  , Subst
+  , substTy, substTys
+  , mkTvSubstPrs, extendTvSubst
+  , ctsSubst
+
     -- ** Zonking
 
     -- | Zonking is the operation in which GHC actually switches out mutable unification variables
@@ -539,10 +545,16 @@ module GHC.TcPlugin.API
 -- base
 import Prelude
   hiding ( cos )
+#if !MIN_VERSION_base(4,20,0)
+import Data.Foldable
+  ( foldl' )
+#endif
 #if !MIN_VERSION_ghc(8,11,0)
 import Data.List.NonEmpty
   ( NonEmpty(..) )
 #endif
+import Data.Maybe
+  ( mapMaybe )
 
 -- ghc
 import GHC
@@ -662,6 +674,12 @@ import GHC.Core.Type
 #elif MIN_VERSION_ghc(9,0,0)
   , pattern One, pattern Many
 #endif
+  , TvSubstEnv
+#if MIN_VERSION_ghc(9,6,0)
+  , Subst
+#else
+  , TCvSubst
+#endif
   )
 import GHC.Data.FastString
   ( FastString, fsLit, unpackFS )
@@ -748,6 +766,10 @@ import GHC.Tc.Utils.TcType
   ( TcType, TcLevel, MetaDetails, MetaInfo
   , isSkolemTyVar, isMetaTyVar
   , nonDetCmpType
+  , tyCoFVsOfTypes, mkTvSubst, extendTvSubst
+  , substTy, substTys, mkTvSubstPrs
+  , tyCoVarsOfTypes
+  , scopedSort
   )
 import GHC.Tc.Utils.TcMType
   ( isFilledMetaTyVar_maybe, writeMetaTyVar )
@@ -793,21 +815,27 @@ import GHC.Types.SrcLoc
   )
 import GHC.Types.Unique
   ( Unique )
+-- UniqFM didn't have the first argument in GHC < 9.0.
+-- This adds a little compatibility shim for that.
 #if MIN_VERSION_ghc(9,0,0)
 import GHC.Types.Unique.FM as UniqFM
-  ( UniqFM, emptyUFM, listToUFM )
+  ( UniqFM )
 #else
 import qualified GHC.Types.Unique.FM as GHC
   ( UniqFM )
-import GHC.Types.Unique.FM as UniqFM
-  ( emptyUFM, listToUFM )
 #endif
+import GHC.Types.Unique.FM
+  ( emptyUFM, listToUFM, nonDetEltsUFM )
 import GHC.Types.Unique.DFM
   ( UniqDFM, lookupUDFM, lookupUDFM_Directly, elemUDFM )
 import GHC.Types.Var
   ( TyVar, CoVar, TcTyVar, EvVar
-  , mkTyVar, DFunId
+  , mkTyVar, DFunId, isTyVar, updateTyVarKind
   )
+import GHC.Types.Var.Env
+  ( InScopeSet, mkInScopeSet, mapVarEnv, elemVarEnv )
+import GHC.Types.Var.Set
+  ( mkVarSet, unionVarSet )
 import GHC.Utils.Outputable
   ( Outputable(..), SDoc, text )
 #if MIN_VERSION_ghc(9,2,0)
@@ -839,6 +867,10 @@ import GHC.Unit.Types
 import GHC.Utils.Misc
   ( HasDebugCallStack )
 #endif
+import GHC.Utils.FV
+  ( fvVarList )
+import GHC.Utils.Misc
+  ( filterOut )
 
 -- ghc-tcplugin-api
 import GHC.TcPlugin.API.Internal
@@ -981,6 +1013,60 @@ tcLookup = liftTcPluginM . GHC.tcLookup
 -- | Lookup an identifier, such as a type variable.
 tcLookupId :: MonadTcPlugin m => Name -> m Id
 tcLookupId = liftTcPluginM . GHC.tcLookupId
+
+--------------------------------------------------------------------------------
+
+#if !MIN_VERSION_ghc(9,6,0)
+type Subst = TCvSubst
+#endif
+
+-- | Compute an idempotent substitution from a collection of constraints, in
+-- particular from inert Givens.
+--
+-- NB: don't pass any set of constraints to this function; they should form a
+-- terminating generalised substitution as in Note [inert_eqs: the inert equalities]
+-- in GHC.Tc.Solver.InertSet.
+ctsSubst :: [Ct] -> Subst
+ctsSubst cts = niFixSubst inScope $ listToUFM prs
+  where
+    toSubstPair ct =
+      case classifyPredType (ctEvPred (ctEvidence ct)) of
+        EqPred NomEq t1 t2
+          | Just tv <- getTyVar_maybe t1
+          -- NB: deliberately don't re-orient constraints: we are only
+          -- guaranteed a terminating substitution by keeping the orientation.
+          -> Just (tv, t2)
+        _ -> Nothing
+    prs = mapMaybe toSubstPair cts
+    inScope =
+      mkInScopeSet $
+        mkVarSet (map fst prs)
+          `unionVarSet`
+        tyCoVarsOfTypes (map snd prs)
+
+-- NB: copied from GHC, as GHC doesn't export this function.
+niFixSubst :: InScopeSet -> TvSubstEnv -> Subst
+niFixSubst in_scope tenv
+  | not_fixpoint = niFixSubst in_scope (mapVarEnv (substTy subst) tenv)
+  | otherwise    = tenv_subst
+  where
+    tenv_subst = mkTvSubst in_scope tenv
+
+    range_fvs = tyCoFVsOfTypes (nonDetEltsUFM tenv)
+    range_tvs = fvVarList range_fvs
+
+    not_fixpoint  = any in_domain range_tvs
+    in_domain tv  = tv `elemVarEnv` tenv
+
+    free_tvs = scopedSort (filterOut in_domain range_tvs)
+
+    subst = foldl' add_free_tv tenv_subst free_tvs
+
+    add_free_tv subst0 tv
+      | isTyVar tv = extendTvSubst subst0 tv (mkTyVarTy tv')
+      | otherwise  = subst0
+     where
+        tv' = updateTyVarKind (substTy subst0) tv
 
 --------------------------------------------------------------------------------
 
