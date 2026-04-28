@@ -33,13 +33,13 @@ library
 
   build-depends:
     base
-      >= 4.13.0  && < 4.23,
+      >= 4.13.0  && < 5,
     array
       >= 0.5.3.0 && < 0.6,
     containers
       >= 0.6     && < 0.9,
     ghc
-      >= 8.8     && < 9.16,
+      >= 8.8     && < 10.1,
     transformers
       >= 0.5     && < 0.7,
     template-haskell
