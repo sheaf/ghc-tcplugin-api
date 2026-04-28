@@ -766,10 +766,15 @@ import GHC.Tc.Utils.TcType
   ( TcType, TcLevel, MetaDetails, MetaInfo
   , isSkolemTyVar, isMetaTyVar
   , nonDetCmpType
-  , tyCoFVsOfTypes, mkTvSubst, extendTvSubst
+  , mkTvSubst, extendTvSubst
   , substTy, substTys, mkTvSubstPrs
   , tyCoVarsOfTypes
   , scopedSort
+#if MIN_VERSION_ghc(9,15,0)
+  , tyCoVarsOfTypes
+#else
+  , tyCoFVsOfTypes
+#endif
   )
 import GHC.Tc.Utils.TcMType
   ( isFilledMetaTyVar_maybe, writeMetaTyVar )
@@ -835,7 +840,11 @@ import GHC.Types.Var
 import GHC.Types.Var.Env
   ( InScopeSet, mkInScopeSet, mapVarEnv, elemVarEnv )
 import GHC.Types.Var.Set
-  ( mkVarSet, unionVarSet )
+  ( mkVarSet, unionVarSet
+#if MIN_VERSION_ghc(9,15,0)
+  , nonDetVarSetElems
+#endif
+  )
 import GHC.Utils.Outputable
   ( Outputable(..), SDoc, text )
 #if MIN_VERSION_ghc(9,2,0)
@@ -867,8 +876,11 @@ import GHC.Unit.Types
 import GHC.Utils.Misc
   ( HasDebugCallStack )
 #endif
+#if MIN_VERSION_ghc(9,15,0)
+#else
 import GHC.Utils.FV
   ( fvVarList )
+#endif
 import GHC.Utils.Misc
   ( filterOut )
 
@@ -1052,8 +1064,14 @@ niFixSubst in_scope tenv
   where
     tenv_subst = mkTvSubst in_scope tenv
 
-    range_fvs = tyCoFVsOfTypes (nonDetEltsUFM tenv)
-    range_tvs = fvVarList range_fvs
+    range_tvs :: [TyVar]
+    range_tvs =
+#if MIN_VERSION_ghc(9,15,0)
+        nonDetVarSetElems $ tyCoVarsOfTypes
+#else
+        fvVarList $ tyCoFVsOfTypes
+#endif
+      $ nonDetEltsUFM tenv
 
     not_fixpoint  = any in_domain range_tvs
     in_domain tv  = tv `elemVarEnv` tenv
