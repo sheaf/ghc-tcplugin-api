@@ -1,4 +1,8 @@
 
+# Version 0.18.2.1 (2026-04-28)
+
+- Add support for GHC 10.0.
+
 # Version 0.18.2.0 (2025-01-14)
 
 - Add a new function `ctsSubst` which computes a fix-point substitution from
