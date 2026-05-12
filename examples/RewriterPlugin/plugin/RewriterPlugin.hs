@@ -101,7 +101,7 @@ rewrite_add pluginDefs@( PluginDefs { .. } ) _givens tys
       -> do
           wanted <- mkCancellableWanted pluginDefs b
           pure $ API.TcPluginRewriteTo
-                  ( API.mkTyFamAppReduction "RewriterPlugin" API.Nominal API.emptyVarSet addTyCon tys b )
+                  ( API.mkTyFamAppReduction "RewriterPlugin" API.Nominal [] addTyCon tys b )
                   [ wanted ]
       -- "Add a Zero = a", emitting a "Cancellable a" Wanted constraint.
       | Just ( zero, [] ) <- API.splitTyConApp_maybe b
@@ -109,7 +109,7 @@ rewrite_add pluginDefs@( PluginDefs { .. } ) _givens tys
       -> do
         wanted <- mkCancellableWanted pluginDefs a
         pure $ API.TcPluginRewriteTo
-                  ( API.mkTyFamAppReduction "RewriterPlugin" API.Nominal API.emptyVarSet addTyCon tys a )
+                  ( API.mkTyFamAppReduction "RewriterPlugin" API.Nominal [] addTyCon tys a )
                   [ wanted ]
 
       -- Erroring on 'BadNat'.
@@ -134,8 +134,9 @@ rewrite_add pluginDefs@( PluginDefs { .. } ) _givens tys
   = pure API.TcPluginNoRewrite
   where
     badRedn :: API.Reduction
-    badRedn = API.mkTyFamAppReduction "RewriterPlugin" API.emptyVarSet API.Nominal
-      addTyCon tys (API.mkTyConApp badNatTyCon [])
+    badRedn =
+      API.mkTyFamAppReduction "RewriterPlugin" API.Nominal []
+        addTyCon tys $ API.mkTyConApp badNatTyCon []
 
 -- Given the type "a", constructs a "Cancellable a" constraint
 -- which has the source location information obtained from the rewriter environment.
