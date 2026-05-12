@@ -89,10 +89,11 @@ plugin =
 tcPlugin :: TcPlugin
 tcPlugin =
   TcPlugin
-    { tcPluginInit    = return ()
-    , tcPluginSolve   = pluginSolve
-    , tcPluginRewrite = \ _ -> emptyUFM
-    , tcPluginStop    = \ _ -> return ()
+    { tcPluginInit     = return ()
+    , tcPluginSolve    = pluginSolve
+    , tcPluginRewrite  = \ _ -> emptyUFM
+    , tcPluginPostTc   = \ _ -> return ()
+    , tcPluginShutdown = \ _ -> return ()
     }
 
 pluginSolve :: () -> [ Ct ] -> [ Ct ] -> TcPluginM Solve TcPluginSolveResult

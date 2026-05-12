@@ -1,7 +1,21 @@
 
+# Version 0.19.0.0 (2026-05-12)
+
+- Starting from GHC 10.0, typechecker plugins are kept running during the
+  desugaring phase, in order to improve the accuracy of pattern-match warnings.
+
+  For this reason, the `tcPluginStop` function has been split into two:
+    - `tcPluginPostTc`, for actions to run at the end of typechecking.
+    - `tcPluginShutdown`, to shut down the plugin. This action runs in `IO`
+       instead of a `TcM`-like monad.
+
+  On GHC versions prior to 10.0, both of these actions will run at the end of
+  typechecking, and typechecker plugins aren't invoked during pattern-match
+  checking.
+
 # Version 0.18.2.1 (2026-04-28)
 
-- Add support for GHC 10.0.
+- Add preliminary support for GHC 10.0.
 
 # Version 0.18.2.0 (2025-01-14)
 

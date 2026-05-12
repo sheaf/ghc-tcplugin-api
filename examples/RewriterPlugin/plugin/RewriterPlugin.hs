@@ -34,10 +34,11 @@ plugin =
 tcPlugin :: API.TcPlugin
 tcPlugin =
   API.TcPlugin
-    { API.tcPluginInit    = tcPluginInit
-    , API.tcPluginSolve   = tcPluginSolve
-    , API.tcPluginRewrite = tcPluginRewrite
-    , API.tcPluginStop    = tcPluginStop
+    { API.tcPluginInit     = tcPluginInit
+    , API.tcPluginSolve    = tcPluginSolve
+    , API.tcPluginRewrite  = tcPluginRewrite
+    , API.tcPluginPostTc   = const $ pure ()
+    , API.tcPluginShutdown = const $ pure ()
     }
 
 -- Definitions used by the plugin.
@@ -77,10 +78,6 @@ tcPluginInit = do
 -- The plugin does no constraint-solving, only type-family rewriting.
 tcPluginSolve :: PluginDefs -> [ API.Ct ] -> [ API.Ct ] -> API.TcPluginM API.Solve API.TcPluginSolveResult
 tcPluginSolve _ _ _ = pure $ API.TcPluginOk [] []
-
--- Nothing to shutdown.
-tcPluginStop :: PluginDefs -> API.TcPluginM API.Stop ()
-tcPluginStop _ = pure ()
 
 --------------------------------------------------------------------------------
 -- Simplification of type family applications.

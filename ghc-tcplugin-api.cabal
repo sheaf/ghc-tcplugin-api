@@ -1,6 +1,6 @@
 cabal-version:  3.0
 name:           ghc-tcplugin-api
-version:        0.18.2.1
+version:        0.19.0.0
 synopsis:       An API for type-checker plugins.
 license:        BSD-3-Clause
 build-type:     Simple
@@ -15,7 +15,7 @@ description:
   for writing GHC type-checking plugins.
 
   Each stage in a type-checking plugin (initialisation, solving, rewriting,
-  shutdown) has a corresponding monad, preventing operations that are only
+  post-tc) has a corresponding monad, preventing operations that are only
   allowed in some stages to be used in the other stages.
   Operations that work across multiple stages are overloaded across monads
   using MTL-like typeclasses.

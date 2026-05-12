@@ -5,7 +5,7 @@
 This library provides a convenient and cross-compatible interface for authors
 of GHC type-checking plugins (starting from GHC 8.8).    
 
-Different stages of a type-checking plugin (initialisation, solving, rewriting, shutdown) are given
+Different stages of a type-checking plugin (initialisation, solving, rewriting, post-tc) are given
 different monads to operate within. This ensures operations that only make sense in one context
 aren't mistakenly carried out in another.    
 

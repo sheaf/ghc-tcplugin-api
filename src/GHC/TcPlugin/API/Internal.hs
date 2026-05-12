@@ -166,10 +166,14 @@ import GHC.TcPlugin.API.Internal.Shim
 
 -- | Stage of a type-checking plugin, used as a data kind.
 data TcPluginStage
+  -- | Plugin initialisation
   = Init
+  -- | Solve constraints
   | Solve
+  -- | Rewrite type-families
   | Rewrite
-  | Stop
+  -- | End of typechecking
+  | PostTc
 
 -- | The @solve@ function of a type-checking plugin takes in Given and Wanted
 -- constraints, and should return a 'GHC.Tc.Types.TcPluginSolveResult'
@@ -213,22 +217,22 @@ type TcPluginRewriter
 -- > myTcPlugin args = ...
 data TcPlugin = forall s. TcPlugin
   { tcPluginInit :: TcPluginM Init s
-      -- ^ Initialise plugin, when entering type-checker.
+    -- ^ Initialize plugin (once per module), when starting the type-checker.
 
   , tcPluginSolve :: s -> TcPluginSolver
       -- ^ Solve some constraints.
       --
       -- This function will be invoked at two points in the constraint solving
-      -- process: once to manipulate given constraints, and once to solve
-      -- wanted constraints. In the first case (and only in the first case),
-      -- no wanted constraints will be passed to the plugin.
+      -- process: once to simplify Given constraints, and once to solve
+      -- Wanted constraints. In the first case (and only in the first case),
+      -- no Wanted constraints will be passed to the plugin.
       --
       -- The plugin can either return a contradiction,
       -- or specify that it has solved some constraints (with evidence),
-      -- and possibly emit additional wanted constraints.
+      -- and possibly emit additional constraints. These returned constraints
+      -- must be Givens in the first case, and Wanteds in the second.
       --
-      -- Use @ \\ _ _ _ -> pure $ TcPluginOK [] [] @ if your plugin
-      -- does not provide this functionality.
+      -- Use @ \\ _ _ _ _ -> pure $ TcPluginOk [] [] @ if your plugin
 
   , tcPluginRewrite
       :: s -> GHC.UniqFM
@@ -247,8 +251,18 @@ data TcPlugin = forall s. TcPlugin
     --
     -- Use @ const emptyUFM @ if your plugin does not provide this functionality.
 
-  , tcPluginStop :: s -> TcPluginM Stop ()
-   -- ^ Clean up after the plugin, when exiting the type-checker.
+  , tcPluginPostTc :: s -> TcPluginM PostTc ()
+    -- ^ Action to run at the end of typechecking a module, e.g. to intercept
+    -- the final 'TcGblEnv'/'TcLclEnv' at the end of typechecking, possibly
+    -- modifying mutable fields.
+    --
+    -- Should not terminate the plugin, as the plugin may continue to be invoked
+    -- when desugaring the module (as the pattern-match checker may invoke the
+    -- constraint solver).
+
+  , tcPluginShutdown :: s -> IO ()
+    -- ^ Clean up after the plugin, when GHC is done processing the given
+    -- module (e.g. after desugaring).
   }
 
 -- | The monad used for a type-checker plugin, parametrised by
@@ -272,8 +286,8 @@ newtype instance TcPluginM Rewrite a =
   TcPluginRewriteM { tcPluginRewriteM :: BuiltinDefs -> RewriteEnv -> GHC.TcPluginM a }
   deriving ( Functor, Applicative, Monad )
     via ( ReaderT BuiltinDefs ( ReaderT RewriteEnv GHC.TcPluginM ) )
-newtype instance TcPluginM Stop a =
-  TcPluginStopM { tcPluginStopM :: GHC.TcPluginM a }
+newtype instance TcPluginM PostTc a =
+  TcPluginPostTcM { tcPluginPostTcM :: GHC.TcPluginM a }
   deriving newtype ( Functor, Applicative, Monad )
 
 -- | Ask for the evidence currently gathered by the type-checker.
@@ -384,14 +398,14 @@ instance MonadTcPlugin ( TcPluginM Rewrite ) where
 #endif
         . ( \ f -> f builtinDefs rewriteEnv )
         . tcPluginRewriteM )
-instance MonadTcPlugin ( TcPluginM Stop ) where
-  liftTcPluginM = TcPluginStopM
+instance MonadTcPlugin ( TcPluginM PostTc ) where
+  liftTcPluginM = TcPluginPostTcM
   unsafeWithRunInTcM runInTcM
     = unsafeLiftTcM $ runInTcM
 #ifdef HAS_REWRITING
-      ( GHC.runTcPluginM . tcPluginStopM )
+      ( GHC.runTcPluginM . tcPluginPostTcM )
 #else
-      ( ( `GHC.runTcPluginM` ( error "tcPluginStop: cannot access EvBindsVar" ) ) . tcPluginStopM )
+      ( ( `GHC.runTcPluginM` ( error "tcPluginPostTc: cannot access EvBindsVar" ) ) . tcPluginPostTcM )
 #endif
 
 -- | Take a function whose argument and result types are both within the 'GHC.Tc.TcM' monad,
@@ -409,19 +423,26 @@ mkTcPlugin ( TcPlugin
               { tcPluginInit = tcPluginInit :: TcPluginM Init userDefs
               , tcPluginSolve
               , tcPluginRewrite
-              , tcPluginStop
+              , tcPluginPostTc
+              , tcPluginShutdown
               }
            ) =
   GHC.TcPlugin
-    { GHC.tcPluginInit    = adaptUserInit    tcPluginInit
+    { GHC.tcPluginInit     = adaptUserInit     tcPluginInit
 #ifdef HAS_REWRITING
-    , GHC.tcPluginSolve   = adaptUserSolve   tcPluginSolve
-    , GHC.tcPluginRewrite = adaptUserRewrite tcPluginRewrite
+    , GHC.tcPluginSolve    = adaptUserSolve    tcPluginSolve
+    , GHC.tcPluginRewrite  = adaptUserRewrite  tcPluginRewrite
 #else
-    , GHC.tcPluginSolve   = adaptUserSolveAndRewrite
-                              tcPluginSolve tcPluginRewrite
+    , GHC.tcPluginSolve    = adaptUserSolveAndRewrite
+                               tcPluginSolve tcPluginRewrite
 #endif
-    , GHC.tcPluginStop    = adaptUserStop    tcPluginStop
+#if MIN_VERSION_ghc(10,0,0)
+    , GHC.tcPluginPostTc   = adaptUserPostTc   tcPluginPostTc
+    , GHC.tcPluginShutdown = adaptUserShutdown tcPluginShutdown
+#else
+    , GHC.tcPluginStop     = adaptUserStop
+                               tcPluginPostTc tcPluginShutdown
+#endif
     }
   where
     adaptUserInit :: TcPluginM Init userDefs -> GHC.TcPluginM ( TcPluginDefs userDefs )
@@ -518,9 +539,22 @@ mkTcPlugin ( TcPlugin
 #endif
 #endif
 
-    adaptUserStop :: ( userDefs -> TcPluginM Stop () ) -> TcPluginDefs userDefs -> GHC.TcPluginM ()
-    adaptUserStop userStop ( TcPluginDefs { tcPluginUserDefs } ) =
-      tcPluginStopM $ userStop tcPluginUserDefs
+#if MIN_VERSION_ghc(10,0,0)
+    adaptUserPostTc :: ( userDefs -> TcPluginM PostTc () ) -> TcPluginDefs userDefs -> GHC.TcPluginM ()
+    adaptUserPostTc userPostTc ( TcPluginDefs { tcPluginUserDefs } ) =
+      tcPluginPostTcM $ userPostTc tcPluginUserDefs
+    adaptUserShutdown :: ( userDefs -> IO () ) -> TcPluginDefs userDefs -> IO ()
+    adaptUserShutdown userShutdown ( TcPluginDefs { tcPluginUserDefs } ) =
+      userShutdown tcPluginUserDefs
+#else
+    -- Prior to GHC 10.0, run the "post-tc" and "shutdown" actions in sequence,
+    -- at the end of typechecking. Typechecker plugins do not persist to desugaring.
+    adaptUserStop :: ( userDefs -> TcPluginM PostTc () ) -> ( userDefs -> IO () ) -> TcPluginDefs userDefs -> GHC.TcPluginM ()
+    adaptUserStop userPostTc userShutdown ( TcPluginDefs { tcPluginUserDefs } ) = do
+      tcPluginPostTcM $ userPostTc tcPluginUserDefs
+      GHC.unsafeTcPluginTcM . liftIO $ userShutdown tcPluginUserDefs
+#endif
+
 
 -- | @since 0.15.0.0
 instance ( Monad ( TcPluginM s ), MonadTcPlugin ( TcPluginM s ) ) => MonadIO ( TcPluginM s ) where
@@ -531,7 +565,7 @@ instance ( Monad ( TcPluginM s ), MonadTcPlugin ( TcPluginM s ) ) => MonadIO ( T
 --
 -- These operations are supported by the monads that 'tcPluginSolve'
 -- and 'tcPluginRewrite' use; it is not possible to emit work or
--- throw type errors in 'tcPluginInit' or 'tcPluginStop'.
+-- throw type errors in 'tcPluginInit' or 'tcPluginPostTc'.
 --
 -- See 'mkTcPluginErrorTy' and 'GHC.TcPlugin.API.emitWork' for functions
 -- which require this typeclass.
@@ -553,9 +587,9 @@ instance MonadTcPluginWork ( TcPluginM Rewrite ) where
 instance TypeError ( 'Text "Cannot emit new work in 'tcPluginInit'." )
       => MonadTcPluginWork ( TcPluginM Init ) where
   askBuiltins = error "Cannot emit new work in 'tcPluginInit'."
-instance TypeError ( 'Text "Cannot emit new work in 'tcPluginStop'." )
-      => MonadTcPluginWork ( TcPluginM Stop ) where
-  askBuiltins = error "Cannot emit new work in 'tcPluginStop'."
+instance TypeError ( 'Text "Cannot emit new work in 'tcPluginPostTc'." )
+      => MonadTcPluginWork ( TcPluginM PostTc ) where
+  askBuiltins = error "Cannot emit new work in 'tcPluginPostTc'."
 
 -- | Use this type like 'GHC.TypeLits.ErrorMessage' to write an error message.
 -- This error message can then be thrown at the type-level by the plugin,
@@ -588,8 +622,8 @@ mkTcPluginErrorTy msg = do
     errorMsgTy = interpretErrorMessage builtinDefs msg
   pure $ GHC.mkTyConApp typeErrorTyCon [ GHC.constraintKind, errorMsgTy ]
 
-instance ( Monad (TcPluginM s), MonadTcPlugin (TcPluginM s) )
-      => MonadThings (TcPluginM s) where
+instance ( Monad ( TcPluginM s ), MonadTcPlugin ( TcPluginM s ) )
+      => MonadThings ( TcPluginM s ) where
   lookupThing = unsafeLiftTcM . lookupThing
 
 --------------------------------------------------------------------------------

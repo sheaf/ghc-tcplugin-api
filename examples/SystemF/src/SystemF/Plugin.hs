@@ -46,10 +46,11 @@ plugin =
 tcPlugin :: TcPlugin
 tcPlugin =
   TcPlugin
-    { tcPluginInit    = pluginInit
-    , tcPluginSolve   = pluginSolve
-    , tcPluginRewrite = pluginRewrite
-    , tcPluginStop    = pluginStop
+    { tcPluginInit     = pluginInit
+    , tcPluginSolve    = pluginSolve
+    , tcPluginRewrite  = pluginRewrite
+    , tcPluginPostTc   = const $ pure ()
+    , tcPluginShutdown = const $ pure ()
     }
 
 data PluginDefs =
@@ -85,9 +86,6 @@ pluginInit = do
 
 pluginSolve :: PluginDefs -> [ Ct ] -> [ Ct ] -> TcPluginM Solve TcPluginSolveResult
 pluginSolve _ _ _ = pure $ TcPluginOk [] []
-
-pluginStop :: PluginDefs -> TcPluginM Stop ()
-pluginStop _ = pure ()
 
 --------------------------------------------------------------------------------
 -- Simplification of type family applications.
