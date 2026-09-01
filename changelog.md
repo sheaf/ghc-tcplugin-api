@@ -1,3 +1,9 @@
+
+# Version 0.20.1.0 (2026-09-01)
+
+- Add `cTupleTyConName` and `isCTupleTyConName` to the export list of
+  `GHC.Builtins`.
+
 # Version 0.20.0.0 (2026-09-01)
 
 - Preliminary support for GHC 10.2 (with the known-entities refactor).

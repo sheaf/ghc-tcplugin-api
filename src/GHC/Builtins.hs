@@ -85,6 +85,7 @@ module GHC.Builtins
     -- * Tuples and sums
   , tupleTyCon, tupleDataCon, promotedTupleDataCon
   , sumTyCon, sumDataCon
+  , cTupleTyConName, isCTupleTyConName
   , mkTupleTy, mkBoxedTupleTy, mkSumTy
   , mkListTy, mkPromotedListTy
 #if MIN_VERSION_ghc(8,10,0)
