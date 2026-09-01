@@ -1,3 +1,18 @@
+# Version 0.20.0.0 (2026-09-01)
+
+- Preliminary support for GHC 10.2 (with the known-entities refactor).
+
+- The re-exports of `GHC.Builtin.Names`, `GHC.Builtin.Types` and
+  `GHC.Builtin.Types.Prim` have been replaced by a single umbrella helper
+  module, `GHC.Builtins`. Remarks:
+
+    - GHC 10.2 no longer defines static `Name`s for known-key entities. Instead,
+      these need to be resolved at runtime. Accordingly, `GHC.Builtins`
+      exports `KnownKey` uniques such as `errorMessageTypeErrorFamKey` on
+      GHC >= 10.2, instead of `Name`s such as `errorMessageTypeErrorFamName`.
+
+    - The `MonadThings` class has been removed. Use `tcLookupTyCon`,
+      `tcLookupDataCon` etc instead.
 
 # Version 0.19.0.0 (2026-05-12)
 
