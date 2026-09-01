@@ -5,28 +5,40 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Don't keep running superseded builds of a branch, but never cancel main.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   cabal:
     name: ${{ matrix.cfg.os }} / ghc ${{ matrix.cfg.ghc }}
     runs-on: ${{ matrix.cfg.os }}
     strategy:
+      # Always run the whole matrix so that we get all errors at once.
+      fail-fast: false
       matrix:
         cfg:
-          - { os: ubuntu-latest  , ghc: "9.12.2"  }
-          - { os: ubuntu-latest  , ghc: "9.10.2"  }
-          - { os: ubuntu-latest  , ghc: "9.8.4"   }
-          - { os: ubuntu-latest  , ghc: "9.6.7"   }
-          - { os: ubuntu-latest  , ghc: "9.4.8"   }
-          - { os: ubuntu-latest  , ghc: "9.2.8"   }
-          - { os: ubuntu-latest  , ghc: "9.0.2"   }
-          - { os: ubuntu-latest  , ghc: "8.10.7"  }
-          - { os: ubuntu-latest  , ghc: "8.8.4"   }
-          - { os: macOS-latest   , ghc: "9.12.2"  }
-          - { os: windows-latest , ghc: "9.12.2"  }
+          - { os: ubuntu-latest  , ghc: "9.14.1" , examples: true , docs: true  }
+          - { os: ubuntu-latest  , ghc: "9.12.4" , examples: true , eqsat: true } # only build eqsat on 9.12 for now
+          - { os: ubuntu-latest  , ghc: "9.10.3" , examples: true               }
+          - { os: ubuntu-latest  , ghc: "9.8.4"  , examples: true               }
+          - { os: ubuntu-latest  , ghc: "9.6.7"  , examples: true               }
+          - { os: ubuntu-latest  , ghc: "9.4.8"  , examples: true               }
+          - { os: ubuntu-latest  , ghc: "9.2.8"  , examples: true               }
+          - { os: ubuntu-latest  , ghc: "9.0.2"  , examples: true               }
+          - { os: ubuntu-latest  , ghc: "8.10.7" , examples: true               }
+          - { os: ubuntu-latest  , ghc: "8.8.4" } # skip examples: needs StandaloneKindSignatures
+          - { os: macOS-latest   , ghc: "9.12.4" , examples: true               }
+          - { os: windows-latest , ghc: "9.14.1" , examples: true               }
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up GHC ${{ matrix.cfg.ghc }}
         uses: haskell-actions/setup@v2
@@ -38,46 +50,26 @@ jobs:
           cabal-update: true
 
       - name: Configure the build
-        run: |
-          cabal configure --disable-documentation
-          cabal build all --dry-run
-        # The last step generates dist-newstyle/cache/plan.json for the cache key.
-
-      - name: Restore cached dependencies
-        uses: actions/cache/restore@v4
-        id: cache
-        env:
-          key: ${{ runner.os }}-ghc-${{ steps.setup.outputs.ghc-version }}-cabal-${{ steps.setup.outputs.cabal-version }}
-        with:
-          path: ${{ steps.setup.outputs.cabal-store }}
-          key: ${{ env.key }}-plan-${{ hashFiles('**/plan.json') }}
-          restore-keys: ${{ env.key }}-
-
-      - name: Install dependencies
-        # If we had an exact cache hit, the dependencies will be up to date.
-        if: steps.cache.outputs.cache-hit != 'true'
-        run: cabal build all --only-dependencies
-
-      # Cache dependencies already here, so that we do not have to rebuild them should the subsequent steps fail.
-      - name: Save cached dependencies
-        uses: actions/cache/save@v4
-        # If we had an exact cache hit, trying to save the cache would error because of key clash.
-        if: steps.cache.outputs.cache-hit != 'true'
-        with:
-          path: ${{ steps.setup.outputs.cabal-store }}
-          key: ${{ steps.cache.outputs.cache-primary-key }}
+        run: cabal configure --disable-documentation
 
       - name: Build ghc-tcplugin-api
         run: cabal build ghc-tcplugin-api
 
+      - name: Build the documentation
+        if: matrix.cfg.docs
+        run: cabal haddock ghc-tcplugin-api
+
       - name: Build and lint System F example
-        # Skip this test on GHC 8.8.4: we need StandaloneKindSignatures.
-        if: matrix.cfg.ghc != '8.8.4'
+        if: matrix.cfg.examples
         working-directory: ./examples/SystemF
         run: cabal build system-f
 
+      - name: Build and lint rewriter plugin example
+        if: matrix.cfg.examples
+        working-directory: ./examples/RewriterPlugin
+        run: cabal build lib:RewriterPlugin
+
       - name: Build and lint equality saturation example
-        # Only run this test on 9.12 for now.
-        if: matrix.cfg.ghc == '9.12.2'
+        if: matrix.cfg.eqsat
         working-directory: ./examples/EqSat
         run: cabal build eq-sat
