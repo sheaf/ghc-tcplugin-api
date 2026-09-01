@@ -51,7 +51,6 @@ module GHC.TcPlugin.API.Internal
   , TcPluginM(..)
   , TcPluginErrorMessage(..)
   , TcPluginRewriter
-  , MonadThings(..)
   , askRewriteEnv
   , askDeriveds
   , askEvBinds
@@ -75,17 +74,6 @@ import Control.Monad.Trans.Reader
   ( ReaderT(..) )
 
 -- ghc
-import qualified GHC.Builtin.Names
-  as GHC.TypeLits
-    ( errorMessageTypeErrorFamName
-    , typeErrorTextDataConName
-    , typeErrorAppendDataConName
-    , typeErrorVAppendDataConName
-    , typeErrorShowTypeDataConName
-    )
-import qualified GHC.Builtin.Types
-  as GHC
-    ( constraintKind )
 import qualified GHC.Core.DataCon
   as GHC
     ( promoteDataCon )
@@ -104,6 +92,11 @@ import qualified GHC.Data.FastString
 import qualified GHC.Tc.Plugin
   as GHC
     ( tcLookupDataCon, tcLookupTyCon )
+#if MIN_VERSION_ghc(10,1,0)
+import qualified GHC.Tc.Utils.Env
+  as GHC
+    ( rnLookupKnownKeyName )
+#endif
 import qualified GHC.Tc.Types
   as GHC
     ( TcM, TcPlugin(..), TcPluginM
@@ -134,12 +127,7 @@ import qualified GHC.Tc.Types.Evidence
 import qualified GHC.Types.Unique.FM
   as GHC
     ( UniqFM )
-#if MIN_VERSION_ghc(9,1,0)
-import GHC.Types.TyThing
-  ( MonadThings(..) )
-#else
-import GHC.Driver.Types
-  ( MonadThings(..) )
+#if !MIN_VERSION_ghc(9,1,0)
 import GHC.Tc.Types.Constraint
   ( ctEvidence, ctEvId, isDerived )
 import GHC.Types.Var.Env
@@ -150,6 +138,26 @@ import GHC.Tc.Plugin
 #endif
 
 -- ghc-tcplugin-api
+import qualified GHC.Builtins
+  as GHC
+    ( constraintKind )
+import qualified GHC.Builtins
+  as GHC.TypeError
+#if MIN_VERSION_ghc(10,1,0)
+    ( errorMessageTypeErrorFamKey
+    , typeErrorTextDataConKey
+    , typeErrorAppendDataConKey
+    , typeErrorVAppendDataConKey
+    , typeErrorShowTypeDataConKey
+    )
+#else
+    ( errorMessageTypeErrorFamName
+    , typeErrorTextDataConName
+    , typeErrorAppendDataConName
+    , typeErrorVAppendDataConName
+    , typeErrorShowTypeDataConName
+    )
+#endif
 #ifndef HAS_REWRITING
 import GHC.TcPlugin.API.Internal.Shim
   ( TcPluginSolveResult, TcPluginRewriteResult(..)
@@ -622,10 +630,6 @@ mkTcPluginErrorTy msg = do
     errorMsgTy = interpretErrorMessage builtinDefs msg
   pure $ GHC.mkTyConApp typeErrorTyCon [ GHC.constraintKind, errorMsgTy ]
 
-instance ( Monad ( TcPluginM s ), MonadTcPlugin ( TcPluginM s ) )
-      => MonadThings ( TcPluginM s ) where
-  lookupThing = unsafeLiftTcM . lookupThing
-
 --------------------------------------------------------------------------------
 -- Private types and functions.
 -- Not exposed at all, even from the internal module.
@@ -647,11 +651,25 @@ data TcPluginDefs s
 
 initBuiltinDefs :: GHC.TcPluginM BuiltinDefs
 initBuiltinDefs = do
-  typeErrorTyCon  <-                        GHC.tcLookupTyCon   GHC.TypeLits.errorMessageTypeErrorFamName
-  textTyCon       <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorTextDataConName
-  showTypeTyCon   <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorShowTypeDataConName
-  concatTyCon     <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorAppendDataConName
-  vcatTyCon       <- GHC.promoteDataCon <$> GHC.tcLookupDataCon GHC.TypeLits.typeErrorVAppendDataConName
+#if MIN_VERSION_ghc(10,1,0)
+  let lookupBuiltin = GHC.unsafeTcPluginTcM . GHC.rnLookupKnownKeyName
+  typeErrorName <- lookupBuiltin GHC.TypeError.errorMessageTypeErrorFamKey
+  textName      <- lookupBuiltin GHC.TypeError.typeErrorTextDataConKey
+  showTypeName  <- lookupBuiltin GHC.TypeError.typeErrorShowTypeDataConKey
+  concatName    <- lookupBuiltin GHC.TypeError.typeErrorAppendDataConKey
+  vcatName      <- lookupBuiltin GHC.TypeError.typeErrorVAppendDataConKey
+#else
+  let typeErrorName = GHC.TypeError.errorMessageTypeErrorFamName
+      textName      = GHC.TypeError.typeErrorTextDataConName
+      showTypeName  = GHC.TypeError.typeErrorShowTypeDataConName
+      concatName    = GHC.TypeError.typeErrorAppendDataConName
+      vcatName      = GHC.TypeError.typeErrorVAppendDataConName
+#endif
+  typeErrorTyCon  <-                        GHC.tcLookupTyCon   typeErrorName
+  textTyCon       <- GHC.promoteDataCon <$> GHC.tcLookupDataCon textName
+  showTypeTyCon   <- GHC.promoteDataCon <$> GHC.tcLookupDataCon showTypeName
+  concatTyCon     <- GHC.promoteDataCon <$> GHC.tcLookupDataCon concatName
+  vcatTyCon       <- GHC.promoteDataCon <$> GHC.tcLookupDataCon vcatName
   pure ( BuiltinDefs { .. } )
 
 interpretErrorMessage :: BuiltinDefs -> TcPluginErrorMessage -> GHC.PredType

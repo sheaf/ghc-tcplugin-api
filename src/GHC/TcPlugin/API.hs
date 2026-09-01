@@ -511,7 +511,6 @@ module GHC.TcPlugin.API
 
     -- | == Names
   , Name, OccName, TyThing, TcTyThing
-  , MonadThings(..)
   , Class(classTyCon), DataCon, TyCon, Id
   , FastString
 
@@ -559,25 +558,6 @@ import Data.Maybe
 -- ghc
 import GHC
   ( TyThing(..) )
-import GHC.Builtin.Names
- ( hasKey
- , eqPrimTyConKey, eqReprPrimTyConKey
- , heqTyConKey, eqTyConKey, coercibleTyConKey
- )
-import GHC.Builtin.Types
-  ( typeSymbolKind, charTy
-#if MIN_VERSION_ghc(9,1,0)
-  , naturalTy
-#else
-  , typeNatKind
-#endif
-  )
-#if !MIN_VERSION_ghc(9,0,0)
-import GHC.Builtin.Types
-  ( intDataCon )
-import GHC.Builtin.Types.Prim
-  ( intPrimTy )
-#endif
 import GHC.Core
   ( CoreBndr, CoreExpr, Expr(..), mkTyApps, mkApps )
 import GHC.Core.Class
@@ -885,6 +865,20 @@ import GHC.Utils.Misc
   ( filterOut )
 
 -- ghc-tcplugin-api
+import GHC.Builtins
+  ( hasKey
+  , eqPrimTyConKey, eqReprPrimTyConKey
+  , heqTyConKey, eqTyConKey, coercibleTyConKey
+  , typeSymbolKind, charTy
+#if MIN_VERSION_ghc(9,1,0)
+  , naturalTy
+#else
+  , typeNatKind
+#endif
+#if !MIN_VERSION_ghc(9,0,0)
+  , intDataCon, intPrimTy
+#endif
+  )
 import GHC.TcPlugin.API.Internal
 #ifndef HAS_REWRITING
 import GHC.TcPlugin.API.Internal.Shim
