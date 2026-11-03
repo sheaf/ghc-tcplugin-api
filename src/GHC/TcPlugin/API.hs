@@ -842,14 +842,9 @@ import GHC.Driver.Finder
   ( FindResult(..) )
 #endif
 import GHC.Unit.Module
-  ( UnitId, unitIdFS, stringToUnitId, mkModuleName )
-#if MIN_VERSION_ghc(9,5,0)
-import Language.Haskell.Syntax.Module.Name
-  ( ModuleName )
-#else
-import GHC.Unit.Module.Name
-  ( ModuleName )
-#endif
+  ( ModuleName, mkModuleName
+  , UnitId, unitIdFS, stringToUnitId
+  )
 import GHC.Unit.Types
   ( Module )
 #if MIN_VERSION_ghc(9,0,0) && !MIN_VERSION_ghc(9,5,0)

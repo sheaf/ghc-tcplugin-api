@@ -146,13 +146,8 @@ import GHC.Driver.Types
 import GHC.Driver.Finder
   ( cannotFindModule )
 #endif
-#if MIN_VERSION_ghc(9,5,0)
-import Language.Haskell.Syntax.Module.Name
+import GHC.Unit.Module
   ( moduleNameString )
-#else
-import GHC.Unit.Module.Name
-  ( moduleNameString )
-#endif
 import GHC.Utils.Panic
   ( pgmErrorDoc )
 import GHC.Tc.Plugin
