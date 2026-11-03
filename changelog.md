@@ -1,3 +1,6 @@
+# Version 0.20.1.1 (2026-11-03)
+
+- Adapt to GHC HEAD `ModuleName` change (GHC commit 575c4bc6cb).
 
 # Version 0.20.1.0 (2026-09-01)
 
