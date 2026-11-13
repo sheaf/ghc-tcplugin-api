@@ -333,6 +333,7 @@ module GHC.TcPlugin.API
     -- before the actual evidence term (the class dictionary expression).
 
   , classDataCon
+  , mkStringExpr, mkStringExprFS
 #if !MIN_VERSION_ghc(9,0,0)
   , mkUncheckedIntExpr
 #endif
@@ -587,6 +588,13 @@ import GHC.Core.InstEnv
 import GHC.Core.Make
   ( mkCoreConApps )
 #endif
+import qualified GHC.Core.Make
+  as GHC
+    ( mkStringExprFSWith
+#if MIN_VERSION_ghc(9,4,0)
+    , getMkStringIds
+#endif
+    )
 import GHC.Core.Predicate
   ( EqRel(..)
 #if MIN_VERSION_ghc(9,13,0)
@@ -662,7 +670,7 @@ import GHC.Core.Type
 #endif
   )
 import GHC.Data.FastString
-  ( FastString, fsLit, unpackFS )
+  ( FastString, fsLit, mkFastString, unpackFS )
 #if MIN_VERSION_ghc(9,5,0)
 import GHC.Plugins
   ( thNameToGhcNameIO )
@@ -687,6 +695,11 @@ import GHC.Utils.Monad
 #endif
 import qualified GHC.Tc.Plugin
   as GHC
+#if MIN_VERSION_ghc(10,1,0)
+import qualified GHC.Tc.Utils.Env
+  as GHC
+    ( tcLookupKnownKeyId )
+#endif
 #if MIN_VERSION_ghc(9,4,0)
 import GHC.Tc.Solver.InertSet
   ( InertSet )
@@ -1014,6 +1027,25 @@ tcLookup = liftTcPluginM . GHC.tcLookup
 -- | Lookup an identifier, such as a type variable.
 tcLookupId :: MonadTcPlugin m => Name -> m Id
 tcLookupId = liftTcPluginM . GHC.tcLookupId
+
+-- | Build a Core expression of type 'String' that evaluates to the given string.
+mkStringExpr :: MonadTcPlugin m => String -> m CoreExpr
+mkStringExpr = mkStringExprFS . mkFastString
+
+-- | Build a Core expression of type 'String' that evaluates to the given
+-- 'FastString', decoded as a 'String'.
+mkStringExprFS :: MonadTcPlugin m => FastString -> m CoreExpr
+#if MIN_VERSION_ghc(10,1,0)
+mkStringExprFS fs = do
+  ids <- unsafeLiftTcM $ GHC.getMkStringIds GHC.tcLookupKnownKeyId
+  pure $ GHC.mkStringExprFSWith ids fs
+#elif MIN_VERSION_ghc(9,4,0)
+mkStringExprFS fs = do
+  ids <- GHC.getMkStringIds tcLookupId
+  pure $ GHC.mkStringExprFSWith ids fs
+#else
+mkStringExprFS = GHC.mkStringExprFSWith tcLookupId
+#endif
 
 --------------------------------------------------------------------------------
 
