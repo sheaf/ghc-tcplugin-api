@@ -1,3 +1,14 @@
+# Version 0.20.2.0 (2026-11-13)
+
+- Add `mkStringExpr :: MonadTcPlugin m => String -> m CoreExpr` and
+  `mkStringExprFS :: MonadTcPlugin m => FastString -> m CoreExpr` to
+  `GHC.TcPlugin.API`.
+
+  These replace the functions of the same name from `GHC.Core.Make`. Those
+  functions were deleted in GHC 10.2 (alongside the `MonadThings` class they
+  used for their contexts). Adapt to this change by importing `mkStringExpr`
+  from `GHC.TcPlugin.API`, and not through `GHC.Core.Make` nor `GHC.Plugins`.
+
 # Version 0.20.1.1 (2026-11-03)
 
 - Adapt to GHC HEAD `ModuleName` change (GHC commit 575c4bc6cb).
